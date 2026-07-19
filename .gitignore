@@ -1,0 +1,19 @@
+# colcon workspace output
+/build/
+/install/
+/log/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# ROS runtime data
+.ros/
+
+# Editors and operating systems
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

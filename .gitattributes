@@ -1,0 +1,5 @@
+# Keep scripts and ROS configuration consistent across Windows and Linux.
+* text=auto eol=lf
+
+# Occupancy-grid images are binary assets.
+*.pgm binary
