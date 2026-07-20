@@ -4,7 +4,8 @@ A mobile companion-rover simulation built with ROS 2 Jazzy and Gazebo
 Harmonic. The project currently covers the robot model, differential-drive
 motion, 2D LiDAR, manual control, odometry, SLAM, and a saved occupancy map.
 
-The current milestone is autonomous localization and navigation with Nav2.
+The current milestone is autonomous localization, navigation, and waypoint
+patrol with Nav2.
 
 ## Features
 
@@ -19,6 +20,7 @@ The current milestone is autonomous localization and navigation with Nav2.
 - RViz configurations for the robot, simulation, and mapping
 - Reusable 8 x 6 metre arena with three static obstacles
 - Saved map and initial Nav2 localization/navigation configuration
+- Configurable multi-waypoint patrol behaviour
 
 ## Current Status
 
@@ -30,6 +32,7 @@ The current milestone is autonomous localization and navigation with Nav2.
 | LiDAR and odometry bridge | Complete |
 | SLAM mapping and map export | Complete |
 | Nav2 localization and autonomous navigation | Initial implementation |
+| Multi-waypoint patrol | Initial implementation |
 | Physical robot deployment | Planned |
 
 ## Project Structure
@@ -37,6 +40,10 @@ The current milestone is autonomous localization and navigation with Nav2.
 ```text
 .
 |-- src/
+|   |-- companion_robot_behaviors/
+|   |   |-- config/        # Patrol waypoints and behaviour parameters
+|   |   |-- launch/        # Complete autonomous-patrol launch file
+|   |   `-- scripts/       # High-level patrol node
 |   |-- companion_robot_description/
 |   |   |-- launch/        # Standalone robot visualization
 |   |   |-- rviz/          # RViz model configuration
@@ -196,6 +203,28 @@ area of the map.
 Do not run the WASD controller while Nav2 is controlling the robot because both
 nodes publish velocity commands to `/cmd_vel`.
 
+### Start Waypoint Patrol
+
+The patrol launch file starts the complete navigation stack and automatically
+visits the three map-frame poses configured in
+`src/companion_robot_behaviors/config/patrol.yaml`:
+
+```bash
+ros2 launch companion_robot_behaviors patrol.launch.py
+```
+
+One patrol loop runs by default. Set a finite number of loops or repeat forever
+with `loop_count:=0`:
+
+```bash
+ros2 launch companion_robot_behaviors patrol.launch.py loop_count:=2
+ros2 launch companion_robot_behaviors patrol.launch.py loop_count:=0
+```
+
+Each waypoint is stored as three consecutive values: `x`, `y`, and yaw in
+radians. Stop an active patrol with `Ctrl+C`. Do not publish manual WASD commands
+while the patrol node is running.
+
 ## Main ROS Interfaces
 
 | Topic | Type | Purpose |
@@ -217,7 +246,7 @@ topic remains available for later wheel-slip and encoder-odometry experiments.
 
 - Improve AMCL robustness with noisier odometry
 - Tune costmaps and the local controller for tighter spaces
-- Add companion behaviours such as patrol and return-to-dock
+- Add return-to-dock behaviour
 - Test avoidance of moving obstacles
 - Add camera perception
 - Transfer the software stack to physical hardware

@@ -1,0 +1,19 @@
+waypoint_patrol:
+  ros__parameters:
+    # Zero repeats forever. A positive value stops after that many loops.
+    loop_count: 1
+    pause_seconds: 1.0
+    retry_delay: 2.0
+    max_goal_retries: 5
+
+    # Each group contains x, y, and yaw (radians) in the map frame.
+    waypoints:
+      - 0.8
+      - 0.0
+      - 0.0
+      - 0.8
+      - -0.8
+      - -1.5708
+      - 0.0
+      - 0.0
+      - 3.1416
