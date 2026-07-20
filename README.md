@@ -4,7 +4,7 @@ A mobile companion-rover simulation built with ROS 2 Jazzy and Gazebo
 Harmonic. The project currently covers the robot model, differential-drive
 motion, 2D LiDAR, manual control, odometry, SLAM, and a saved occupancy map.
 
-The next milestone is autonomous localization and navigation with Nav2.
+The current milestone is autonomous localization and navigation with Nav2.
 
 ## Features
 
@@ -18,7 +18,7 @@ The next milestone is autonomous localization and navigation with Nav2.
 - Online mapping with SLAM Toolbox
 - RViz configurations for the robot, simulation, and mapping
 - Reusable 8 x 6 metre arena with three static obstacles
-- Saved map ready for the upcoming Nav2 milestone
+- Saved map and initial Nav2 localization/navigation configuration
 
 ## Current Status
 
@@ -29,7 +29,7 @@ The next milestone is autonomous localization and navigation with Nav2.
 | Differential-drive control | Complete |
 | LiDAR and odometry bridge | Complete |
 | SLAM mapping and map export | Complete |
-| Nav2 localization and autonomous navigation | Next milestone |
+| Nav2 localization and autonomous navigation | Initial implementation |
 | Physical robot deployment | Planned |
 
 ## Project Structure
@@ -41,13 +41,16 @@ The next milestone is autonomous localization and navigation with Nav2.
 |   |   |-- launch/        # Standalone robot visualization
 |   |   |-- rviz/          # RViz model configuration
 |   |   `-- urdf/          # Parametric robot model
-|   `-- companion_robot_gazebo/
-|       |-- config/        # SLAM Toolbox parameters
-|       |-- launch/        # Simulation and mapping launch files
-|       |-- maps/          # Saved occupancy maps
-|       |-- rviz/          # Simulation and mapping views
-|       |-- scripts/       # WASD teleoperation node
-|       `-- worlds/        # Gazebo arena
+|   |-- companion_robot_gazebo/
+|   |   |-- config/        # SLAM Toolbox parameters
+|   |   |-- launch/        # Simulation and mapping launch files
+|   |   |-- maps/          # Saved occupancy maps
+|   |   |-- rviz/          # Simulation and mapping views
+|   |   |-- scripts/       # WASD teleoperation node
+|   |   `-- worlds/        # Gazebo arena
+|   `-- companion_robot_navigation/
+|       |-- config/        # AMCL, costmap, planner, and controller parameters
+|       `-- launch/        # Autonomous-navigation launch file
 |-- .gitignore
 |-- LICENSE
 `-- README.md
@@ -60,7 +63,7 @@ The next milestone is autonomous localization and navigation with Nav2.
 - Gazebo Harmonic and the ROS-Gazebo integration packages
 - `colcon` and `rosdep`
 
-All ROS package dependencies are declared in the two `package.xml` files.
+All ROS package dependencies are declared in each package's `package.xml` file.
 
 ## Installation
 
@@ -175,6 +178,24 @@ colcon build --symlink-install --packages-select companion_robot_gazebo
 source install/setup.bash
 ```
 
+### Start Autonomous Navigation
+
+The navigation launch file starts Gazebo, loads the saved map, localizes the
+robot with AMCL, starts the Nav2 servers, and opens RViz:
+
+```bash
+ros2 launch companion_robot_navigation navigation.launch.py
+```
+
+The simulated robot always spawns at `(0, 0, 0)`, so AMCL is initialized with
+that pose automatically. If the pose needs correction, select **2D Pose
+Estimate** in RViz and drag an arrow from the robot's actual location in its
+forward direction. Then select **Nav2 Goal** and place a goal inside the free
+area of the map.
+
+Do not run the WASD controller while Nav2 is controlling the robot because both
+nodes publish velocity commands to `/cmd_vel`.
+
 ## Main ROS Interfaces
 
 | Topic | Type | Purpose |
@@ -194,11 +215,10 @@ topic remains available for later wheel-slip and encoder-odometry experiments.
 
 ## Roadmap
 
-- Load the saved map with Nav2
-- Localize the robot using AMCL
-- Send navigation goals from RViz
-- Add local and global costmaps for obstacle avoidance
+- Improve AMCL robustness with noisier odometry
+- Tune costmaps and the local controller for tighter spaces
 - Add companion behaviours such as patrol and return-to-dock
+- Test avoidance of moving obstacles
 - Add camera perception
 - Transfer the software stack to physical hardware
 
