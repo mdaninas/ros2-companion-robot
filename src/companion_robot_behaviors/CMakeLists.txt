@@ -14,4 +14,10 @@ install(
   RENAME waypoint_patrol
 )
 
+install(
+  PROGRAMS scripts/auto_docking.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME auto_docking
+)
+
 ament_package()
