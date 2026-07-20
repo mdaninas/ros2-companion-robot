@@ -91,7 +91,9 @@ controller_server:
     FollowPath:
       plugin: dwb_core::DWBLocalPlanner
       debug_trajectory_details: true
-      min_vel_x: 0.0
+      # A small negative limit lets DWB choose a safe reverse trajectory when
+      # the target is behind the robot instead of always turning around first.
+      min_vel_x: -0.12
       min_vel_y: 0.0
       max_vel_x: 0.22
       max_vel_y: 0.0

@@ -20,7 +20,9 @@ patrol with Nav2.
 - RViz configurations for the robot, simulation, and mapping
 - Reusable 8 x 6 metre arena with three static obstacles
 - Saved map and initial Nav2 localization/navigation configuration
+- Forward and limited reverse motion during autonomous navigation
 - Configurable multi-waypoint patrol behaviour
+- Return-to-home service that safely interrupts an active patrol
 
 ## Current Status
 
@@ -33,6 +35,7 @@ patrol with Nav2.
 | SLAM mapping and map export | Complete |
 | Nav2 localization and autonomous navigation | Initial implementation |
 | Multi-waypoint patrol | Initial implementation |
+| Return to home | Initial implementation |
 | Physical robot deployment | Planned |
 
 ## Project Structure
@@ -203,6 +206,10 @@ area of the map.
 Do not run the WASD controller while Nav2 is controlling the robot because both
 nodes publish velocity commands to `/cmd_vel`.
 
+The Nav2 local controller may drive backward at a limited speed when a safe
+reverse path is more practical. It can still turn and drive forward whenever
+that produces the safer or lower-cost route.
+
 ### Start Waypoint Patrol
 
 The patrol launch file starts the complete navigation stack and automatically
@@ -225,6 +232,17 @@ Each waypoint is stored as three consecutive values: `x`, `y`, and yaw in
 radians. Stop an active patrol with `Ctrl+C`. Do not publish manual WASD commands
 while the patrol node is running.
 
+To interrupt a continuous patrol and send the robot back to `(0, 0, 0)`, keep
+the patrol launch running and call its service from a second sourced terminal:
+
+```bash
+ros2 service call /return_home std_srvs/srv/Trigger "{}"
+```
+
+The home pose can be changed through `home_pose` in `patrol.yaml`. The patrol
+node cancels its current Nav2 goal before sending the home goal, so the two
+commands do not compete.
+
 ## Main ROS Interfaces
 
 | Topic | Type | Purpose |
@@ -246,7 +264,7 @@ topic remains available for later wheel-slip and encoder-odometry experiments.
 
 - Improve AMCL robustness with noisier odometry
 - Tune costmaps and the local controller for tighter spaces
-- Add return-to-dock behaviour
+- Add a simulated docking station and charging behaviour
 - Test avoidance of moving obstacles
 - Add camera perception
 - Transfer the software stack to physical hardware

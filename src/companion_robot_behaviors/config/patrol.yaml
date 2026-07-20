@@ -6,6 +6,9 @@ waypoint_patrol:
     retry_delay: 2.0
     max_goal_retries: 5
 
+    # Home pose contains x, y, and yaw (radians) in the map frame.
+    home_pose: [0.0, 0.0, 0.0]
+
     # Each group contains x, y, and yaw (radians) in the map frame.
     waypoints:
       - 0.8
