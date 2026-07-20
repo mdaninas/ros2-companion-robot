@@ -1,0 +1,34 @@
+docking_behavior:
+  ros__parameters:
+    # All poses use [x, y, yaw] in the map frame; yaw is in radians.
+    frame_id: map
+
+    # Nav2 will bring the robot here before precision docking takes over.
+    staging_pose: [0.0, -1.70, 1.5708]
+
+    # Final robot-centre pose between the dock's two side guides.
+    dock_pose: [0.0, -2.55, 1.5708]
+
+    # The robot faces north at both poses and reverses south into the dock.
+    approach_direction: reverse
+
+    robot_frame: base_footprint
+    controller_frequency: 20.0
+    nav2_server_timeout: 30.0
+
+    # Precision-approach limits. Reverse speed is intentionally slow.
+    max_reverse_speed: 0.08
+    min_reverse_speed: 0.025
+    max_angular_speed: 0.30
+    linear_gain: 0.60
+    angular_gain: 1.80
+    heading_stop_angle: 0.35
+
+    dock_position_tolerance: 0.05
+    dock_yaw_tolerance: 0.18
+    contact_position_tolerance: 0.09
+
+    # Stop if the rear LiDAR sector sees something before the expected dock.
+    rear_sector_half_angle: 0.35
+    rear_stop_distance: 0.15
+    sensor_timeout: 1.0
