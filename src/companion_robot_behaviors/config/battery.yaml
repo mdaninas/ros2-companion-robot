@@ -1,0 +1,19 @@
+battery_simulator:
+  ros__parameters:
+    initial_percentage: 0.75
+    low_battery_threshold: 0.25
+    auto_dock_rearm_threshold: 0.40
+    auto_dock_enabled: true
+
+    # Fractions of full capacity per simulated second. Charging is accelerated
+    # so the complete behavior can be demonstrated without a long wait.
+    idle_discharge_rate: 0.00005
+    motion_discharge_rate: 0.0015
+    charging_rate: 0.02
+    publish_frequency: 2.0
+
+    command_timeout: 1.0
+    nominal_voltage: 11.1
+    full_voltage: 12.6
+    empty_voltage: 9.9
+    design_capacity_ah: 5.0

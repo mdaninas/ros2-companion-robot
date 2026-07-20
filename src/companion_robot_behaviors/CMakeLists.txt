@@ -20,4 +20,10 @@ install(
   RENAME auto_docking
 )
 
+install(
+  PROGRAMS scripts/battery_simulator.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME battery_simulator
+)
+
 ament_package()

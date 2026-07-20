@@ -19,6 +19,8 @@ docking_behavior:
     # Precision-approach limits. Reverse speed is intentionally slow.
     max_reverse_speed: 0.08
     min_reverse_speed: 0.025
+    max_forward_speed: 0.10
+    min_forward_speed: 0.03
     max_angular_speed: 0.30
     linear_gain: 0.60
     angular_gain: 1.80
@@ -27,8 +29,15 @@ docking_behavior:
     dock_position_tolerance: 0.05
     dock_yaw_tolerance: 0.18
     contact_position_tolerance: 0.09
+    staging_position_tolerance: 0.08
 
     # Stop if the rear LiDAR sector sees something before the expected dock.
     rear_sector_half_angle: 0.35
     rear_stop_distance: 0.15
+    front_sector_half_angle: 0.35
+    front_self_filter_distance: 0.16
+    front_stop_distance: 0.28
     sensor_timeout: 1.0
+
+    # Undocking is blocked until the simulated battery reaches this level.
+    min_undock_battery: 0.50
