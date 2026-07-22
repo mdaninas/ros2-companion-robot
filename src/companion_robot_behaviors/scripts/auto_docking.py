@@ -33,6 +33,7 @@ class AutoDocking(Node):
     IDLE = "IDLE"
     WAITING_FOR_NAV2 = "WAITING_FOR_NAV2"
     NAVIGATING_TO_STAGING = "NAVIGATING_TO_STAGING"
+    ALIGNING_WITH_DOCK = "ALIGNING_WITH_DOCK"
     PRECISION_DOCKING = "PRECISION_DOCKING"
     DOCKED = "DOCKED"
     CHARGING = "CHARGING"
@@ -50,6 +51,7 @@ class AutoDocking(Node):
         self.declare_parameter("approach_direction", "reverse")
         self.declare_parameter("controller_frequency", 20.0)
         self.declare_parameter("nav2_server_timeout", 30.0)
+        self.declare_parameter("nav2_handoff_delay", 1.0)
         self.declare_parameter("max_reverse_speed", 0.08)
         self.declare_parameter("min_reverse_speed", 0.025)
         self.declare_parameter("max_forward_speed", 0.10)
@@ -57,7 +59,14 @@ class AutoDocking(Node):
         self.declare_parameter("max_angular_speed", 0.30)
         self.declare_parameter("linear_gain", 0.60)
         self.declare_parameter("angular_gain", 1.80)
-        self.declare_parameter("heading_stop_angle", 0.35)
+        self.declare_parameter("lateral_gain", 3.00)
+        self.declare_parameter("max_lateral_heading_correction", 0.30)
+        self.declare_parameter("heading_stop_angle", 0.15)
+        self.declare_parameter("alignment_yaw_tolerance", 0.04)
+        self.declare_parameter("alignment_timeout", 10.0)
+        self.declare_parameter("precision_docking_timeout", 45.0)
+        self.declare_parameter("progress_timeout", 6.0)
+        self.declare_parameter("progress_distance_epsilon", 0.01)
         self.declare_parameter("dock_position_tolerance", 0.05)
         self.declare_parameter("dock_yaw_tolerance", 0.18)
         self.declare_parameter("contact_position_tolerance", 0.09)
@@ -86,6 +95,9 @@ class AutoDocking(Node):
         self.nav2_server_timeout = max(
             1.0, float(self.get_parameter("nav2_server_timeout").value)
         )
+        self.nav2_handoff_delay = max(
+            0.0, float(self.get_parameter("nav2_handoff_delay").value)
+        )
         self.max_reverse_speed = max(
             0.01, float(self.get_parameter("max_reverse_speed").value)
         )
@@ -111,8 +123,38 @@ class AutoDocking(Node):
         self.angular_gain = max(
             0.0, float(self.get_parameter("angular_gain").value)
         )
+        self.lateral_gain = max(
+            0.0, float(self.get_parameter("lateral_gain").value)
+        )
+        self.max_lateral_heading_correction = clamp(
+            float(
+                self.get_parameter(
+                    "max_lateral_heading_correction"
+                ).value
+            ),
+            0.05,
+            math.pi / 4.0,
+        )
         self.heading_stop_angle = max(
             0.05, float(self.get_parameter("heading_stop_angle").value)
+        )
+        self.alignment_yaw_tolerance = max(
+            0.01,
+            float(self.get_parameter("alignment_yaw_tolerance").value),
+        )
+        self.alignment_timeout = max(
+            1.0, float(self.get_parameter("alignment_timeout").value)
+        )
+        self.precision_docking_timeout = max(
+            5.0,
+            float(self.get_parameter("precision_docking_timeout").value),
+        )
+        self.progress_timeout = max(
+            1.0, float(self.get_parameter("progress_timeout").value)
+        )
+        self.progress_distance_epsilon = max(
+            0.001,
+            float(self.get_parameter("progress_distance_epsilon").value),
         )
         self.dock_position_tolerance = max(
             0.01,
@@ -194,6 +236,8 @@ class AutoDocking(Node):
         self.active_goal_handle = None
         self.last_feedback_log_at = 0.0
         self.last_control_log_at = 0.0
+        self.best_dock_distance = math.inf
+        self.last_dock_progress_at = time.monotonic()
 
         self.control_timer = self.create_timer(
             1.0 / self.controller_frequency, self._control_loop
@@ -214,6 +258,9 @@ class AutoDocking(Node):
             return
         self.state = state
         self.state_started_at = time.monotonic()
+        if state == self.PRECISION_DOCKING:
+            self.best_dock_distance = math.inf
+            self.last_dock_progress_at = self.state_started_at
         self._publish_status()
         if message:
             self.get_logger().info(message)
@@ -299,17 +346,23 @@ class AutoDocking(Node):
     def _control_loop(self):
         if self.state == self.WAITING_FOR_NAV2:
             self._wait_for_nav2()
+        elif self.state == self.ALIGNING_WITH_DOCK:
+            self._run_dock_alignment()
         elif self.state == self.PRECISION_DOCKING:
             self._run_precision_docking()
         elif self.state == self.UNDOCKING:
             self._run_precision_undocking()
 
     def _wait_for_nav2(self):
+        elapsed = time.monotonic() - self.state_started_at
+        if elapsed < self.nav2_handoff_delay:
+            return
+
         if self.action_client.server_is_ready():
             self._send_staging_goal()
             return
 
-        if time.monotonic() - self.state_started_at > self.nav2_server_timeout:
+        if elapsed > self.nav2_server_timeout:
             self._fail("Nav2 did not become ready before the timeout.")
 
     def _send_staging_goal(self):
@@ -371,8 +424,8 @@ class AutoDocking(Node):
 
         self._stop_robot()
         self._set_state(
-            self.PRECISION_DOCKING,
-            "Staging pose reached; starting slow reverse approach.",
+            self.ALIGNING_WITH_DOCK,
+            "Staging pose reached; aligning with the dock centreline.",
         )
 
     def _scan_callback(self, scan):
@@ -449,6 +502,23 @@ class AutoDocking(Node):
         delta_y = dock_y - y
         distance = math.hypot(delta_x, delta_y)
         final_yaw_error = normalize_angle(dock_yaw - yaw)
+        now = time.monotonic()
+
+        if now - self.state_started_at > self.precision_docking_timeout:
+            self._fail("Precision docking exceeded its time limit.")
+            return
+
+        if distance < (
+            self.best_dock_distance - self.progress_distance_epsilon
+        ):
+            self.best_dock_distance = distance
+            self.last_dock_progress_at = now
+        elif now - self.last_dock_progress_at > self.progress_timeout:
+            self._fail(
+                "Precision docking is not making progress; "
+                "the robot may be blocked by a guide."
+            )
+            return
 
         if (
             distance <= self.dock_position_tolerance
@@ -458,7 +528,10 @@ class AutoDocking(Node):
             return
 
         if self.rear_range <= self.rear_stop_distance:
-            if distance <= self.contact_position_tolerance:
+            if (
+                distance <= self.contact_position_tolerance
+                and abs(final_yaw_error) <= self.dock_yaw_tolerance
+            ):
                 self._complete_docking(distance, final_yaw_error)
             else:
                 self._fail(
@@ -466,8 +539,27 @@ class AutoDocking(Node):
                 )
             return
 
-        travel_heading = math.atan2(delta_y, delta_x)
-        desired_robot_yaw = normalize_angle(travel_heading + math.pi)
+        dock_forward_x = math.cos(dock_yaw)
+        dock_forward_y = math.sin(dock_yaw)
+        dock_left_x = -dock_forward_y
+        dock_left_y = dock_forward_x
+        offset_x = x - dock_x
+        offset_y = y - dock_y
+        longitudinal_error = (
+            offset_x * dock_forward_x + offset_y * dock_forward_y
+        )
+        lateral_error = offset_x * dock_left_x + offset_y * dock_left_y
+
+        if longitudinal_error < -self.contact_position_tolerance:
+            self._fail("Robot passed behind the configured dock pose.")
+            return
+
+        lateral_correction = clamp(
+            self.lateral_gain * lateral_error,
+            -self.max_lateral_heading_correction,
+            self.max_lateral_heading_correction,
+        )
+        desired_robot_yaw = normalize_angle(dock_yaw + lateral_correction)
         heading_error = normalize_angle(desired_robot_yaw - yaw)
 
         speed = clamp(
@@ -490,14 +582,52 @@ class AutoDocking(Node):
         command.angular.z = angular_z
         self.cmd_vel_publisher.publish(command)
 
-        now = time.monotonic()
         if now - self.last_control_log_at >= 1.0:
             self.last_control_log_at = now
             self.get_logger().info(
                 "Dock approach: "
                 f"distance={distance:.2f} m, "
+                f"lateral_error={lateral_error:.2f} m, "
                 f"heading_error={heading_error:.2f} rad, "
                 f"rear_range={self.rear_range:.2f} m"
+            )
+
+    def _run_dock_alignment(self):
+        pose = self._robot_pose()
+        if pose is None:
+            self._stop_robot()
+            if time.monotonic() - self.state_started_at > self.sensor_timeout:
+                self._fail("Robot pose is unavailable; alignment stopped.")
+            return
+
+        _, _, yaw = pose
+        dock_yaw = self.dock_pose[2]
+        yaw_error = normalize_angle(dock_yaw - yaw)
+        if abs(yaw_error) <= self.alignment_yaw_tolerance:
+            self._stop_robot()
+            self._set_state(
+                self.PRECISION_DOCKING,
+                "Dock alignment complete; starting slow reverse approach.",
+            )
+            return
+
+        if time.monotonic() - self.state_started_at > self.alignment_timeout:
+            self._fail("Could not align with the dock before the timeout.")
+            return
+
+        command = Twist()
+        command.angular.z = clamp(
+            self.angular_gain * yaw_error,
+            -self.max_angular_speed,
+            self.max_angular_speed,
+        )
+        self.cmd_vel_publisher.publish(command)
+
+        now = time.monotonic()
+        if now - self.last_control_log_at >= 1.0:
+            self.last_control_log_at = now
+            self.get_logger().info(
+                f"Dock alignment: yaw_error={yaw_error:.2f} rad"
             )
 
     def _run_precision_undocking(self):
@@ -605,7 +735,12 @@ def main(args=None):
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.stop()
+        try:
+            node.stop()
+        except Exception:
+            # SIGINT may invalidate the ROS context before the final zero
+            # velocity command can be published.
+            pass
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

@@ -4,6 +4,9 @@ battery_simulator:
     low_battery_threshold: 0.25
     auto_dock_rearm_threshold: 0.40
     auto_dock_enabled: true
+    auto_dock_retry_delay: 3.0
+    # Kept off for manual docking demos; energy_patrol.launch.py enables it.
+    auto_undock_when_full: false
 
     # Fractions of full capacity per simulated second. Charging is accelerated
     # so the complete behavior can be demonstrated without a long wait.

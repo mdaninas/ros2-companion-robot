@@ -9,13 +9,15 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     open_rviz = LaunchConfiguration("open_rviz")
+    loop_count = LaunchConfiguration("loop_count")
+    patrol_params = LaunchConfiguration("patrol_params")
     docking_params = LaunchConfiguration("docking_params")
     battery_params = LaunchConfiguration("battery_params")
-    auto_undock_when_full = LaunchConfiguration("auto_undock_when_full")
 
     behaviors_share = FindPackageShare("companion_robot_behaviors")
-    navigation_share = FindPackageShare("companion_robot_navigation")
-
+    default_patrol_params = PathJoinSubstitution(
+        [behaviors_share, "config", "patrol.yaml"]
+    )
     default_docking_params = PathJoinSubstitution(
         [behaviors_share, "config", "docking.yaml"]
     )
@@ -23,35 +25,30 @@ def generate_launch_description():
         [behaviors_share, "config", "battery.yaml"]
     )
 
-    navigation = IncludeLaunchDescription(
+    docking_stack = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution(
-                [navigation_share, "launch", "navigation.launch.py"]
+                [behaviors_share, "launch", "docking.launch.py"]
             )
         ),
-        launch_arguments={"open_rviz": open_rviz}.items(),
+        launch_arguments={
+            "open_rviz": open_rviz,
+            "docking_params": docking_params,
+            "battery_params": battery_params,
+            "auto_undock_when_full": "true",
+        }.items(),
     )
 
-    docking = Node(
+    patrol = Node(
         package="companion_robot_behaviors",
-        executable="auto_docking",
-        name="docking_behavior",
-        output="screen",
-        parameters=[docking_params, {"use_sim_time": True}],
-    )
-
-    battery = Node(
-        package="companion_robot_behaviors",
-        executable="battery_simulator",
-        name="battery_simulator",
+        executable="waypoint_patrol",
+        name="waypoint_patrol",
         output="screen",
         parameters=[
-            battery_params,
+            patrol_params,
             {
                 "use_sim_time": True,
-                "auto_undock_when_full": ParameterValue(
-                    auto_undock_when_full, value_type=bool
-                ),
+                "loop_count": ParameterValue(loop_count, value_type=int),
             },
         ],
     )
@@ -64,6 +61,16 @@ def generate_launch_description():
                 description="Open RViz with the Nav2 default view.",
             ),
             DeclareLaunchArgument(
+                "loop_count",
+                default_value="0",
+                description="Number of patrol loops; zero repeats forever.",
+            ),
+            DeclareLaunchArgument(
+                "patrol_params",
+                default_value=default_patrol_params,
+                description="Path to the waypoint-patrol parameter file.",
+            ),
+            DeclareLaunchArgument(
                 "docking_params",
                 default_value=default_docking_params,
                 description="Path to the auto-docking parameter file.",
@@ -73,13 +80,7 @@ def generate_launch_description():
                 default_value=default_battery_params,
                 description="Path to the battery-simulation parameter file.",
             ),
-            DeclareLaunchArgument(
-                "auto_undock_when_full",
-                default_value="false",
-                description="Automatically undock after charging reaches 100%.",
-            ),
-            navigation,
-            docking,
-            battery,
+            docking_stack,
+            patrol,
         ]
     )

@@ -24,7 +24,8 @@ and energy-aware docking with Nav2.
 - Configurable multi-waypoint patrol behaviour
 - Return-to-home service that safely interrupts an active patrol
 - Reverse-entry docking station with LiDAR-protected automatic docking
-- Simulated battery discharge, charging, low-battery docking, and undocking
+- Energy-aware patrol with automatic low-battery docking, charging, undocking,
+  and waypoint resumption
 
 ## Current Status
 
@@ -43,6 +44,7 @@ and energy-aware docking with Nav2.
 | Automatic undocking | Initial implementation |
 | Battery and charging simulation | Initial implementation |
 | Low-battery docking trigger | Initial implementation |
+| Energy-aware patrol pause and resume | Initial implementation |
 | Physical robot deployment | Planned |
 
 ## Project Structure
@@ -281,10 +283,11 @@ ros2 service call /dock_robot std_srvs/srv/Trigger "{}"
 ```
 
 Nav2 first drives the robot to the staging marker. The precision controller then
-takes over `/cmd_vel`, uses the `map` to `base_footprint` transform to correct
-its heading, and reverses slowly into the dock. The rear LiDAR sector stops the
-approach if an unexpected object is detected. Do not run patrol or WASD control
-at the same time.
+takes over `/cmd_vel`, aligns the robot with the dock, follows its centreline,
+and reverses slowly between the guides. The rear LiDAR sector stops the approach
+if an unexpected object is detected. A no-progress timeout reports `ERROR`
+instead of leaving the robot stuck in precision docking. Do not run patrol or
+WASD control at the same time.
 
 The current docking state is published as a transient-local string, so a new
 terminal can inspect the latest value at any time:
@@ -295,7 +298,8 @@ ros2 topic echo /docking_status std_msgs/msg/String \
 ```
 
 The expected docking sequence is `IDLE`, `WAITING_FOR_NAV2`,
-`NAVIGATING_TO_STAGING`, `PRECISION_DOCKING`, `DOCKED`, and `CHARGING`.
+`NAVIGATING_TO_STAGING`, `ALIGNING_WITH_DOCK`, `PRECISION_DOCKING`, `DOCKED`,
+and `CHARGING`.
 When the battery reaches full capacity, the final state is `FULLY_CHARGED`.
 
 ### Simulate Low Battery and Automatic Docking
@@ -333,6 +337,28 @@ The robot moves forward out of the station and stops at the staging pose. A
 front LiDAR safety sector stops undocking if the exit is obstructed. The state
 sequence is `CHARGING` or `FULLY_CHARGED`, then `UNDOCKING`, and finally `IDLE`.
 
+### Run an Energy-Aware Patrol
+
+This launch combines continuous waypoint patrol, docking, and battery
+simulation in one state-aware workflow:
+
+```bash
+ros2 launch companion_robot_behaviors energy_patrol.launch.py
+```
+
+To demonstrate the complete cycle without waiting for normal discharge, use a
+second sourced terminal:
+
+```bash
+ros2 service call /simulate_low_battery std_srvs/srv/Trigger "{}"
+```
+
+The patrol saves its current waypoint and pauses as soon as battery docking
+starts. The robot docks and charges to 100%, automatically undocks to the
+staging pose, and then retries the saved waypoint before continuing its patrol.
+The launch repeats patrol loops indefinitely by default; pass `loop_count:=N`
+to use a finite number of loops.
+
 ## Main ROS Interfaces
 
 | Interface | Type | Purpose |
@@ -359,7 +385,6 @@ topic remains available for later wheel-slip and encoder-odometry experiments.
 
 - Improve AMCL robustness with noisier odometry
 - Tune costmaps and the local controller for tighter spaces
-- Integrate low-battery docking with patrol pause and resume
 - Test avoidance of moving obstacles
 - Add camera perception
 - Transfer the software stack to physical hardware

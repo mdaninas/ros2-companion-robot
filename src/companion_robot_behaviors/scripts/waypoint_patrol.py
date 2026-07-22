@@ -8,7 +8,10 @@ import rclpy
 from action_msgs.msg import GoalStatus
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 
@@ -22,6 +25,7 @@ class WaypointPatrol(Node):
         self.declare_parameter("retry_delay", 2.0)
         self.declare_parameter("max_goal_retries", 5)
         self.declare_parameter("home_pose", [0.0, 0.0, 0.0])
+        self.declare_parameter("energy_resume_delay", 1.0)
 
         flat_waypoints = [
             float(value) for value in self.get_parameter("waypoints").value
@@ -43,6 +47,9 @@ class WaypointPatrol(Node):
         self.max_goal_retries = max(
             0, int(self.get_parameter("max_goal_retries").value)
         )
+        self.energy_resume_delay = max(
+            0.1, float(self.get_parameter("energy_resume_delay").value)
+        )
         home_pose = [
             float(value) for value in self.get_parameter("home_pose").value
         ]
@@ -56,6 +63,15 @@ class WaypointPatrol(Node):
         self.return_home_service = self.create_service(
             Trigger, "/return_home", self._handle_return_home
         )
+        docking_qos = QoSProfile(depth=1)
+        docking_qos.reliability = ReliabilityPolicy.RELIABLE
+        docking_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.docking_status_subscription = self.create_subscription(
+            String,
+            "/docking_status",
+            self._docking_status_callback,
+            docking_qos,
+        )
         self.current_waypoint = 0
         self.completed_loops = 0
         self.retry_count = 0
@@ -66,6 +82,8 @@ class WaypointPatrol(Node):
         self.active_goal_kind = None
         self.goal_request_pending = False
         self.cancel_in_progress = False
+        self.paused_for_energy = False
+        self.docking_state = "UNKNOWN"
         self._scheduled_timer = None
         self._last_feedback_log_ns = 0
 
@@ -104,6 +122,9 @@ class WaypointPatrol(Node):
         )
 
     def _send_current_waypoint(self):
+        if self.paused_for_energy:
+            return
+
         if self.return_state is not None:
             self._send_home_goal()
             return
@@ -179,7 +200,9 @@ class WaypointPatrol(Node):
         )
 
         if kind == "patrol" and self.return_state is not None:
-            self._cancel_active_patrol_goal()
+            self._cancel_active_patrol_goal("return_home")
+        elif kind == "patrol" and self.paused_for_energy:
+            self._cancel_active_patrol_goal("energy_pause")
 
     def _feedback_callback(self, feedback_message):
         now_ns = self.get_clock().now().nanoseconds
@@ -195,7 +218,9 @@ class WaypointPatrol(Node):
             self.active_goal_handle = None
             self.active_goal_kind = None
 
-        if kind == "patrol" and self.return_state is not None:
+        if kind == "patrol" and (
+            self.return_state is not None or self.paused_for_energy
+        ):
             return
 
         if wrapped_result.status != GoalStatus.STATUS_SUCCEEDED:
@@ -245,6 +270,13 @@ class WaypointPatrol(Node):
 
     def _handle_return_home(self, request, response):
         del request
+        if self.paused_for_energy:
+            response.success = False
+            response.message = (
+                "Return-home is unavailable while battery docking is active."
+            )
+            return response
+
         if self.return_state is not None:
             response.success = True
             response.message = "Return-home is already in progress."
@@ -254,14 +286,10 @@ class WaypointPatrol(Node):
         self.return_state = "requested"
         self.retry_count = 0
 
-        if self._scheduled_timer is not None:
-            timer = self._scheduled_timer
-            self._scheduled_timer = None
-            timer.cancel()
-            self.destroy_timer(timer)
+        self._cancel_scheduled_timer()
 
         if self.active_goal_handle is not None:
-            self._cancel_active_patrol_goal()
+            self._cancel_active_patrol_goal("return_home")
         elif not self.goal_request_pending and self._server_timer is None:
             self._schedule(self._send_home_goal, 0.01)
 
@@ -269,24 +297,84 @@ class WaypointPatrol(Node):
         response.message = "Patrol stopped; robot is returning home."
         return response
 
-    def _cancel_active_patrol_goal(self):
+    def _docking_status_callback(self, message):
+        state = message.data.strip().upper()
+        self.docking_state = state
+
+        if state == "IDLE":
+            if not self.paused_for_energy:
+                return
+
+            self.paused_for_energy = False
+            self.retry_count = 0
+            self.get_logger().info(
+                "Docking cycle complete; resuming the pending waypoint."
+            )
+            if (
+                self.return_state is None
+                and not self.finished
+                and not self.goal_request_pending
+                and self.active_goal_handle is None
+            ):
+                self._schedule(
+                    self._send_current_waypoint, self.energy_resume_delay
+                )
+            return
+
+        if state == "UNKNOWN" or self.finished or self.return_state is not None:
+            return
+
+        if not self.paused_for_energy:
+            self.paused_for_energy = True
+            self._cancel_scheduled_timer()
+            self.get_logger().info(
+                "Battery docking started; patrol paused at "
+                f"waypoint {self.current_waypoint + 1}."
+            )
+
+        if self.active_goal_kind == "patrol":
+            self._cancel_active_patrol_goal("energy_pause")
+
+    def _cancel_scheduled_timer(self):
+        if self._scheduled_timer is None:
+            return
+
+        timer = self._scheduled_timer
+        self._scheduled_timer = None
+        timer.cancel()
+        self.destroy_timer(timer)
+
+    def _cancel_active_patrol_goal(self, reason):
         if self.cancel_in_progress or self.active_goal_handle is None:
             return
 
         self.cancel_in_progress = True
-        self.return_state = "canceling"
+        self.active_goal_kind = None
+        if reason == "return_home":
+            self.return_state = "canceling"
         future = self.active_goal_handle.cancel_goal_async()
-        future.add_done_callback(self._cancel_callback)
+        future.add_done_callback(
+            lambda cancel_future: self._cancel_callback(cancel_future, reason)
+        )
 
-    def _cancel_callback(self, future):
+    def _cancel_callback(self, future, reason):
         self.cancel_in_progress = False
         cancel_response = future.result()
         if cancel_response.goals_canceling:
-            self.get_logger().info("Active patrol goal canceled.")
+            if reason == "energy_pause":
+                self.get_logger().info(
+                    "Active waypoint canceled; patrol is waiting for charging."
+                )
+            else:
+                self.get_logger().info("Active patrol goal canceled.")
         else:
             self.get_logger().warning(
                 "Patrol goal had already finished before cancellation."
             )
+
+        if reason == "energy_pause":
+            return
+
         self.return_state = "requested"
         self._schedule(self._send_home_goal, 0.1)
 
@@ -313,7 +401,7 @@ def main(args=None):
     try:
         while rclpy.ok() and not node.finished:
             rclpy.spin_once(node, timeout_sec=0.2)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()

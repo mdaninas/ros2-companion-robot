@@ -29,6 +29,8 @@ class BatterySimulator(Node):
         self.declare_parameter("low_battery_threshold", 0.25)
         self.declare_parameter("auto_dock_rearm_threshold", 0.40)
         self.declare_parameter("auto_dock_enabled", True)
+        self.declare_parameter("auto_undock_when_full", False)
+        self.declare_parameter("auto_dock_retry_delay", 3.0)
         self.declare_parameter("idle_discharge_rate", 0.00005)
         self.declare_parameter("motion_discharge_rate", 0.0015)
         self.declare_parameter("charging_rate", 0.02)
@@ -54,6 +56,12 @@ class BatterySimulator(Node):
         )
         self.auto_dock_enabled = bool(
             self.get_parameter("auto_dock_enabled").value
+        )
+        self.auto_undock_when_full = bool(
+            self.get_parameter("auto_undock_when_full").value
+        )
+        self.auto_dock_retry_delay = max(
+            0.5, float(self.get_parameter("auto_dock_retry_delay").value)
         )
         self.idle_discharge_rate = max(
             0.0, float(self.get_parameter("idle_discharge_rate").value)
@@ -102,6 +110,7 @@ class BatterySimulator(Node):
             self._simulate_low_battery,
         )
         self.dock_client = self.create_client(Trigger, "/dock_robot")
+        self.undock_client = self.create_client(Trigger, "/undock_robot")
 
         self.docking_state = "UNKNOWN"
         self.motion_level = 0.0
@@ -109,7 +118,11 @@ class BatterySimulator(Node):
         self.last_update_at = self.get_clock().now()
         self.auto_dock_latched = False
         self.auto_dock_future = None
+        self.auto_dock_retry_not_before = 0.0
+        self.auto_undock_latched = False
+        self.auto_undock_future = None
         self.last_unavailable_log_at = 0.0
+        self.last_undock_unavailable_log_at = 0.0
         self.last_percentage_log = None
 
         self.timer = self.create_timer(
@@ -124,6 +137,19 @@ class BatterySimulator(Node):
 
     def _docking_status_callback(self, message):
         self.docking_state = message.data
+        if self.docking_state == "IDLE":
+            self.auto_undock_latched = False
+        elif (
+            self.docking_state == "ERROR"
+            and self.percentage <= self.low_threshold
+        ):
+            self.auto_dock_latched = False
+            self.auto_dock_retry_not_before = (
+                time.monotonic() + self.auto_dock_retry_delay
+            )
+            self.get_logger().warning(
+                "Docking failed while battery is low; scheduling a retry."
+            )
 
     def _command_callback(self, command):
         linear_load = abs(command.linear.x) / 0.22
@@ -137,6 +163,7 @@ class BatterySimulator(Node):
         del request
         self.percentage = max(0.01, self.low_threshold - 0.05)
         self.auto_dock_latched = False
+        self.auto_dock_retry_not_before = 0.0
         response.success = True
         response.message = (
             f"Battery set to {self.percentage * 100.0:.1f}%; "
@@ -171,6 +198,7 @@ class BatterySimulator(Node):
         self._publish_battery()
         self._log_percentage_changes()
         self._request_automatic_docking_if_needed()
+        self._request_automatic_undocking_if_needed()
 
     def _active_motion(self, now):
         if self.last_command_at is None:
@@ -228,17 +256,18 @@ class BatterySimulator(Node):
         )
 
     def _request_automatic_docking_if_needed(self):
+        now = time.monotonic()
         if (
             not self.auto_dock_enabled
             or self.percentage > self.low_threshold
             or self.auto_dock_latched
             or self.auto_dock_future is not None
             or self.docking_state not in self.AUTO_DOCK_READY_STATES
+            or now < self.auto_dock_retry_not_before
         ):
             return
 
         if not self.dock_client.service_is_ready():
-            now = time.monotonic()
             if now - self.last_unavailable_log_at >= 2.0:
                 self.last_unavailable_log_at = now
                 self.get_logger().warning(
@@ -247,6 +276,9 @@ class BatterySimulator(Node):
             return
 
         self.auto_dock_latched = True
+        self.auto_dock_retry_not_before = (
+            now + self.auto_dock_retry_delay
+        )
         self.get_logger().warning(
             f"Low battery ({self.percentage * 100.0:.1f}%); "
             "requesting automatic docking."
@@ -271,6 +303,55 @@ class BatterySimulator(Node):
             self.auto_dock_latched = False
             self.get_logger().error(
                 f"Automatic docking rejected: {response.message}"
+            )
+
+    def _request_automatic_undocking_if_needed(self):
+        if (
+            not self.auto_undock_when_full
+            or self.docking_state != "FULLY_CHARGED"
+            or self.percentage < 0.999
+            or self.auto_undock_latched
+            or self.auto_undock_future is not None
+        ):
+            return
+
+        if not self.undock_client.service_is_ready():
+            now = time.monotonic()
+            if now - self.last_undock_unavailable_log_at >= 2.0:
+                self.last_undock_unavailable_log_at = now
+                self.get_logger().warning(
+                    "Battery full; waiting for /undock_robot service."
+                )
+            return
+
+        self.auto_undock_latched = True
+        self.get_logger().info(
+            "Battery full; requesting automatic undocking."
+        )
+        self.auto_undock_future = self.undock_client.call_async(
+            Trigger.Request()
+        )
+        self.auto_undock_future.add_done_callback(
+            self._auto_undock_response
+        )
+
+    def _auto_undock_response(self, future):
+        self.auto_undock_future = None
+        try:
+            response = future.result()
+        except Exception as error:
+            self.auto_undock_latched = False
+            self.get_logger().error(f"Automatic undocking call failed: {error}")
+            return
+
+        if response.success:
+            self.get_logger().info(
+                f"Automatic undocking accepted: {response.message}"
+            )
+        else:
+            self.auto_undock_latched = False
+            self.get_logger().error(
+                f"Automatic undocking rejected: {response.message}"
             )
 
 

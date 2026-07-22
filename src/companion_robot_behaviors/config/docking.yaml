@@ -15,6 +15,8 @@ docking_behavior:
     robot_frame: base_footprint
     controller_frequency: 20.0
     nav2_server_timeout: 30.0
+    # Let an active patrol goal finish canceling before staging takes Nav2.
+    nav2_handoff_delay: 1.0
 
     # Precision-approach limits. Reverse speed is intentionally slow.
     max_reverse_speed: 0.08
@@ -24,10 +26,17 @@ docking_behavior:
     max_angular_speed: 0.30
     linear_gain: 0.60
     angular_gain: 1.80
-    heading_stop_angle: 0.35
+    lateral_gain: 3.00
+    max_lateral_heading_correction: 0.30
+    heading_stop_angle: 0.15
+    alignment_yaw_tolerance: 0.04
+    alignment_timeout: 10.0
+    precision_docking_timeout: 45.0
+    progress_timeout: 6.0
+    progress_distance_epsilon: 0.01
 
     dock_position_tolerance: 0.05
-    dock_yaw_tolerance: 0.18
+    dock_yaw_tolerance: 0.08
     contact_position_tolerance: 0.09
     staging_position_tolerance: 0.08
 
