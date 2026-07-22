@@ -165,9 +165,12 @@ class BatterySimulator(Node):
         self.auto_dock_latched = False
         self.auto_dock_retry_not_before = 0.0
         response.success = True
+        if self.auto_dock_enabled:
+            next_action = "the battery simulator will request docking."
+        else:
+            next_action = "the mission manager will coordinate docking."
         response.message = (
-            f"Battery set to {self.percentage * 100.0:.1f}%; "
-            "automatic docking will be requested."
+            f"Battery set to {self.percentage * 100.0:.1f}%; {next_action}"
         )
         self.get_logger().warning(response.message)
         self._publish_battery()

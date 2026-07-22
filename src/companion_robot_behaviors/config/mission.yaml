@@ -1,0 +1,19 @@
+mission_manager:
+  ros__parameters:
+    low_battery_threshold: 0.25
+    full_battery_threshold: 0.999
+    full_charge_hold_seconds: 1.0
+
+    # A failed patrol goal or docking cycle is retried through its owning node.
+    recovery_retry_delay: 3.0
+    max_patrol_recovery_attempts: 3
+    max_docking_recovery_attempts: 3
+
+    # Replan when Nav2 keeps requesting motion but odometry does not change.
+    stuck_timeout: 15.0
+    command_timeout: 1.0
+    linear_command_threshold: 0.03
+    angular_command_threshold: 0.08
+    progress_distance_epsilon: 0.04
+    progress_yaw_epsilon: 0.08
+    update_frequency: 5.0

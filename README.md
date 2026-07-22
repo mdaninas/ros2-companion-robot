@@ -5,7 +5,7 @@ Harmonic. The project currently covers the robot model, differential-drive
 motion, 2D LiDAR, manual control, odometry, SLAM, and a saved occupancy map.
 
 The current milestone is autonomous localization, navigation, waypoint patrol,
-and energy-aware docking with Nav2.
+energy-aware docking, and mission-level recovery with Nav2.
 
 ## Features
 
@@ -28,6 +28,7 @@ and energy-aware docking with Nav2.
   and waypoint resumption
 - Moving pedestrian obstacle detected through LiDAR and the Nav2 costmaps
 - Nav2 360-degree collision slowdown and emergency-stop zones
+- Central mission state manager with automatic patrol and docking recovery
 
 ## Current Status
 
@@ -48,6 +49,7 @@ and energy-aware docking with Nav2.
 | Low-battery docking trigger | Initial implementation |
 | Energy-aware patrol pause and resume | Initial implementation |
 | Dynamic obstacle avoidance | Initial implementation |
+| Mission state and autonomous recovery | Initial implementation |
 | Physical robot deployment | Planned |
 
 ## Project Structure
@@ -56,9 +58,9 @@ and energy-aware docking with Nav2.
 .
 |-- src/
 |   |-- companion_robot_behaviors/
-|   |   |-- config/        # Patrol, docking, and battery parameters
+|   |   |-- config/        # Patrol, docking, battery, and mission parameters
 |   |   |-- launch/        # Autonomous behavior launch files
-|   |   `-- scripts/       # Patrol, docking, and battery nodes
+|   |   `-- scripts/       # Patrol, docking, battery, and mission nodes
 |   |-- companion_robot_description/
 |   |   |-- launch/        # Standalone robot visualization
 |   |   |-- rviz/          # RViz model configuration
@@ -356,11 +358,34 @@ second sourced terminal:
 ros2 service call /simulate_low_battery std_srvs/srv/Trigger "{}"
 ```
 
-The patrol saves its current waypoint and pauses as soon as battery docking
-starts. The robot docks and charges to 100%, automatically undocks to the
-staging pose, and then retries the saved waypoint before continuing its patrol.
-The launch repeats patrol loops indefinitely by default; pass `loop_count:=N`
-to use a finite number of loops.
+The mission manager is the single coordinator for this launch. The patrol
+saves its current waypoint and pauses as soon as low-battery docking starts.
+The robot docks and charges to 100%, automatically undocks to the staging pose,
+and then retries the saved waypoint before continuing its patrol. The launch
+repeats patrol loops indefinitely by default; pass `loop_count:=N` to use a
+finite number of loops.
+
+Mission state transitions are published on `/mission_status`. A compact status
+snapshot, including subsystem states and recovery counters, is available from
+a second sourced terminal:
+
+```bash
+ros2 service call /get_mission_status std_srvs/srv/Trigger "{}"
+```
+
+Expected states include `INITIALIZING`, `IDLE`, `PATROLLING`,
+`RETURNING_HOME`, `DOCKING`, `CHARGING`, `FULLY_CHARGED`, `UNDOCKING`,
+`RECOVERY`, and `ERROR`. If Nav2 requests motion without odometry progress for
+15 seconds, the manager cancels and replans the current waypoint. Navigation
+failures and failed low-battery docking cycles are retried up to the configured
+limits in `src/companion_robot_behaviors/config/mission.yaml`.
+
+After inspecting and clearing the physical cause of a terminal `ERROR`, reset
+the recovery counters and request another attempt with:
+
+```bash
+ros2 service call /recover_mission std_srvs/srv/Trigger "{}"
+```
 
 ### Test a Moving Obstacle
 
@@ -412,8 +437,14 @@ whole session.
 | `/dock_robot` | `std_srvs/srv/Trigger` | Start automatic docking |
 | `/undock_robot` | `std_srvs/srv/Trigger` | Leave the dock for the staging pose |
 | `/simulate_low_battery` | `std_srvs/srv/Trigger` | Trigger a low-battery demonstration |
+| `/get_mission_status` | `std_srvs/srv/Trigger` | Return one mission and subsystem snapshot |
+| `/recover_mission` | `std_srvs/srv/Trigger` | Reset recovery limits and retry the failed mission |
+| `/recover_patrol` | `std_srvs/srv/Trigger` | Cancel and replan the current patrol goal |
 | `/set_moving_obstacle_enabled` | `std_srvs/srv/SetBool` | Pause or resume the moving obstacle |
 | `/docking_status` | `std_msgs/msg/String` | Latest docking state |
+| `/patrol_status` | `std_msgs/msg/String` | Latest waypoint-patrol state |
+| `/mission_status` | `std_msgs/msg/String` | Latest high-level mission state |
+| `/mission_detail` | `std_msgs/msg/String` | Human-readable explanation of the mission state |
 | `/battery_state` | `sensor_msgs/msg/BatteryState` | Simulated charge and power status |
 
 The `/odom` topic currently comes from Gazebo's pose-based odometry publisher.
@@ -424,7 +455,7 @@ topic remains available for later wheel-slip and encoder-odometry experiments.
 
 - Improve AMCL robustness with noisier odometry
 - Tune costmaps and the local controller for tighter spaces
-- Test avoidance of moving obstacles
+- Add mission-state visualization and diagnostics in RViz
 - Add camera perception
 - Transfer the software stack to physical hardware
 

@@ -26,4 +26,10 @@ install(
   RENAME battery_simulator
 )
 
+install(
+  PROGRAMS scripts/mission_manager.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME mission_manager
+)
+
 ament_package()

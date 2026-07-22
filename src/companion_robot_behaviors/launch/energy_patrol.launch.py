@@ -13,6 +13,7 @@ def generate_launch_description():
     patrol_params = LaunchConfiguration("patrol_params")
     docking_params = LaunchConfiguration("docking_params")
     battery_params = LaunchConfiguration("battery_params")
+    mission_params = LaunchConfiguration("mission_params")
 
     behaviors_share = FindPackageShare("companion_robot_behaviors")
     default_patrol_params = PathJoinSubstitution(
@@ -23,6 +24,9 @@ def generate_launch_description():
     )
     default_battery_params = PathJoinSubstitution(
         [behaviors_share, "config", "battery.yaml"]
+    )
+    default_mission_params = PathJoinSubstitution(
+        [behaviors_share, "config", "mission.yaml"]
     )
 
     docking_stack = IncludeLaunchDescription(
@@ -35,7 +39,8 @@ def generate_launch_description():
             "open_rviz": open_rviz,
             "docking_params": docking_params,
             "battery_params": battery_params,
-            "auto_undock_when_full": "true",
+            "auto_dock_enabled": "false",
+            "auto_undock_when_full": "false",
         }.items(),
     )
 
@@ -51,6 +56,14 @@ def generate_launch_description():
                 "loop_count": ParameterValue(loop_count, value_type=int),
             },
         ],
+    )
+
+    mission_manager = Node(
+        package="companion_robot_behaviors",
+        executable="mission_manager",
+        name="mission_manager",
+        output="screen",
+        parameters=[mission_params, {"use_sim_time": True}],
     )
 
     return LaunchDescription(
@@ -80,7 +93,13 @@ def generate_launch_description():
                 default_value=default_battery_params,
                 description="Path to the battery-simulation parameter file.",
             ),
+            DeclareLaunchArgument(
+                "mission_params",
+                default_value=default_mission_params,
+                description="Path to the mission-manager parameter file.",
+            ),
             docking_stack,
             patrol,
+            mission_manager,
         ]
     )

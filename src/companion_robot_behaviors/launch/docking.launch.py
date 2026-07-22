@@ -11,6 +11,7 @@ def generate_launch_description():
     open_rviz = LaunchConfiguration("open_rviz")
     docking_params = LaunchConfiguration("docking_params")
     battery_params = LaunchConfiguration("battery_params")
+    auto_dock_enabled = LaunchConfiguration("auto_dock_enabled")
     auto_undock_when_full = LaunchConfiguration("auto_undock_when_full")
 
     behaviors_share = FindPackageShare("companion_robot_behaviors")
@@ -49,6 +50,9 @@ def generate_launch_description():
             battery_params,
             {
                 "use_sim_time": True,
+                "auto_dock_enabled": ParameterValue(
+                    auto_dock_enabled, value_type=bool
+                ),
                 "auto_undock_when_full": ParameterValue(
                     auto_undock_when_full, value_type=bool
                 ),
@@ -72,6 +76,11 @@ def generate_launch_description():
                 "battery_params",
                 default_value=default_battery_params,
                 description="Path to the battery-simulation parameter file.",
+            ),
+            DeclareLaunchArgument(
+                "auto_dock_enabled",
+                default_value="true",
+                description="Automatically request docking at low battery.",
             ),
             DeclareLaunchArgument(
                 "auto_undock_when_full",
