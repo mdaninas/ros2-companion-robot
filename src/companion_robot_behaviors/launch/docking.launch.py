@@ -9,19 +9,25 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     open_rviz = LaunchConfiguration("open_rviz")
+    headless = LaunchConfiguration("headless")
     docking_params = LaunchConfiguration("docking_params")
     battery_params = LaunchConfiguration("battery_params")
+    marker_params = LaunchConfiguration("marker_params")
     auto_dock_enabled = LaunchConfiguration("auto_dock_enabled")
     auto_undock_when_full = LaunchConfiguration("auto_undock_when_full")
 
     behaviors_share = FindPackageShare("companion_robot_behaviors")
     navigation_share = FindPackageShare("companion_robot_navigation")
+    perception_share = FindPackageShare("companion_robot_perception")
 
     default_docking_params = PathJoinSubstitution(
         [behaviors_share, "config", "docking.yaml"]
     )
     default_battery_params = PathJoinSubstitution(
         [behaviors_share, "config", "battery.yaml"]
+    )
+    default_marker_params = PathJoinSubstitution(
+        [perception_share, "config", "dock_marker.yaml"]
     )
 
     navigation = IncludeLaunchDescription(
@@ -30,7 +36,10 @@ def generate_launch_description():
                 [navigation_share, "launch", "navigation.launch.py"]
             )
         ),
-        launch_arguments={"open_rviz": open_rviz}.items(),
+        launch_arguments={
+            "open_rviz": open_rviz,
+            "headless": headless,
+        }.items(),
     )
 
     docking = Node(
@@ -39,6 +48,14 @@ def generate_launch_description():
         name="docking_behavior",
         output="screen",
         parameters=[docking_params, {"use_sim_time": True}],
+    )
+
+    marker_detector = Node(
+        package="companion_robot_perception",
+        executable="dock_marker_detector",
+        name="dock_marker_detector",
+        output="screen",
+        parameters=[marker_params, {"use_sim_time": True}],
     )
 
     battery = Node(
@@ -68,6 +85,11 @@ def generate_launch_description():
                 description="Open RViz with the Nav2 default view.",
             ),
             DeclareLaunchArgument(
+                "headless",
+                default_value="false",
+                description="Run Gazebo without its 3D window.",
+            ),
+            DeclareLaunchArgument(
                 "docking_params",
                 default_value=default_docking_params,
                 description="Path to the auto-docking parameter file.",
@@ -76,6 +98,11 @@ def generate_launch_description():
                 "battery_params",
                 default_value=default_battery_params,
                 description="Path to the battery-simulation parameter file.",
+            ),
+            DeclareLaunchArgument(
+                "marker_params",
+                default_value=default_marker_params,
+                description="Path to the dock-marker detector parameters.",
             ),
             DeclareLaunchArgument(
                 "auto_dock_enabled",
@@ -88,6 +115,7 @@ def generate_launch_description():
                 description="Automatically undock after charging reaches 100%.",
             ),
             navigation,
+            marker_detector,
             docking,
             battery,
         ]

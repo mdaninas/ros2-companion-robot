@@ -332,8 +332,304 @@
           </material>
         </visual>
 
+        <!--
+          DICT_4X4_50 marker id 0, modelled as geometry so the world has no
+          external texture dependency. The rear camera uses its 0.12 m size
+          to estimate the dock position relative to the robot.
+        -->
+        <visual name="aruco_white_board">
+          <pose>0 -0.252 0.40 0 0 0</pose>
+          <geometry><box><size>0.140 0.012 0.140</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.95 0.95 0.95 1</ambient>
+            <diffuse>1.00 1.00 1.00 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r0_c0">
+          <pose>0.050 -0.243 0.45 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r0_c1">
+          <pose>0.030 -0.243 0.45 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r0_c2">
+          <pose>0.010 -0.243 0.45 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r0_c3">
+          <pose>-0.010 -0.243 0.45 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r0_c4">
+          <pose>-0.030 -0.243 0.45 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r0_c5">
+          <pose>-0.050 -0.243 0.45 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r1_c0">
+          <pose>0.050 -0.243 0.43 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r1_c2">
+          <pose>0.010 -0.243 0.43 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r1_c5">
+          <pose>-0.050 -0.243 0.43 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r2_c0">
+          <pose>0.050 -0.243 0.41 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r2_c1">
+          <pose>0.030 -0.243 0.41 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r2_c3">
+          <pose>-0.010 -0.243 0.41 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r2_c5">
+          <pose>-0.050 -0.243 0.41 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r3_c0">
+          <pose>0.050 -0.243 0.39 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r3_c1">
+          <pose>0.030 -0.243 0.39 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r3_c2">
+          <pose>0.010 -0.243 0.39 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r3_c5">
+          <pose>-0.050 -0.243 0.39 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r4_c0">
+          <pose>0.050 -0.243 0.37 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r4_c1">
+          <pose>0.030 -0.243 0.37 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r4_c2">
+          <pose>0.010 -0.243 0.37 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r4_c4">
+          <pose>-0.030 -0.243 0.37 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r4_c5">
+          <pose>-0.050 -0.243 0.37 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r5_c0">
+          <pose>0.050 -0.243 0.35 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r5_c1">
+          <pose>0.030 -0.243 0.35 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r5_c2">
+          <pose>0.010 -0.243 0.35 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r5_c3">
+          <pose>-0.010 -0.243 0.35 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r5_c4">
+          <pose>-0.030 -0.243 0.35 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="aruco_black_r5_c5">
+          <pose>-0.050 -0.243 0.35 0 0 0</pose>
+          <geometry><box><size>0.020 0.004 0.020</size></box></geometry>
+          <cast_shadows>false</cast_shadows>
+          <material>
+            <ambient>0.002 0.002 0.002 1</ambient>
+            <diffuse>0.005 0.005 0.005 1</diffuse>
+            <specular>0 0 0 1</specular>
+          </material>
+        </visual>
+
         <visual name="status_light">
-          <pose>0 -0.30 0.39 0 0 0</pose>
+          <pose>0.24 -0.30 0.44 0 0 0</pose>
           <geometry><cylinder><radius>0.055</radius><length>0.05</length></cylinder></geometry>
           <material>
             <ambient>0.02 0.55 0.18 1</ambient>

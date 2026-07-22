@@ -1,8 +1,9 @@
 # ROS 2 Companion Robot
 
 A mobile companion-rover simulation built with ROS 2 Jazzy and Gazebo
-Harmonic. The project currently covers the robot model, differential-drive
-motion, 2D LiDAR, manual control, odometry, SLAM, and a saved occupancy map.
+Harmonic. The project covers the robot model, differential-drive motion, 2D
+LiDAR, a rear RGB camera, manual control, odometry, SLAM, and a saved occupancy
+map.
 
 The current milestone is autonomous localization, navigation, waypoint patrol,
 energy-aware docking, and mission-level recovery with Nav2.
@@ -13,6 +14,7 @@ energy-aware docking, and mission-level recovery with Nav2.
 - Differential-drive physics in Gazebo Sim
 - Two drive wheels and front/rear caster support
 - Simulated 360-degree 2D LiDAR
+- Simulated rear RGB camera with ROS image and calibration topics
 - Safe terminal teleoperation using `W`, `A`, `S`, and `D`
 - Gazebo pose odometry on `/odom`
 - Encoder-style wheel odometry on `/wheel_odom` for comparison
@@ -24,6 +26,8 @@ energy-aware docking, and mission-level recovery with Nav2.
 - Configurable multi-waypoint patrol behaviour
 - Return-to-home service that safely interrupts an active patrol
 - Reverse-entry docking station with LiDAR-protected automatic docking
+- ArUco dock-marker detection and camera-guided final alignment
+- Safe stop and bounded recovery when the dock marker is obscured or lost
 - Energy-aware patrol with automatic low-battery docking, charging, undocking,
   and waypoint resumption
 - Moving pedestrian obstacle detected through LiDAR and the Nav2 costmaps
@@ -38,12 +42,15 @@ energy-aware docking, and mission-level recovery with Nav2.
 | Gazebo arena and robot spawning | Complete |
 | Differential-drive control | Complete |
 | LiDAR and odometry bridge | Complete |
+| Rear RGB camera and ROS image bridge | Complete |
+| Dock-marker perception | Complete |
 | SLAM mapping and map export | Complete |
 | Nav2 localization and autonomous navigation | Initial implementation |
 | Multi-waypoint patrol | Initial implementation |
 | Return to home | Initial implementation |
 | Docking station and docking poses | Complete |
-| Precision auto-docking | Initial implementation |
+| Camera-guided precision auto-docking | Complete in simulation |
+| Marker-loss safety and recovery | Initial implementation |
 | Automatic undocking | Initial implementation |
 | Battery and charging simulation | Initial implementation |
 | Low-battery docking trigger | Initial implementation |
@@ -72,6 +79,9 @@ energy-aware docking, and mission-level recovery with Nav2.
 |   |   |-- rviz/          # Simulation and mapping views
 |   |   |-- scripts/       # WASD teleoperation node
 |   |   `-- worlds/        # Gazebo arena
+|   |-- companion_robot_perception/
+|   |   |-- config/        # Dock-marker detector parameters
+|   |   `-- scripts/       # Rear-camera marker detection node
 |   `-- companion_robot_navigation/
 |       |-- config/        # AMCL, costmap, planner, and controller parameters
 |       `-- launch/        # Autonomous-navigation launch file
@@ -260,8 +270,10 @@ commands do not compete.
 ### Docking Station and Poses
 
 The south side of the Gazebo arena contains a reverse-entry docking station.
-Its cyan floor marker is the staging target, while the green marker between the
-side guides is the final dock target. Both poses are stored in
+Its cyan floor marker is the Nav2 staging target, while the green floor marker
+between the side guides shows the final dock target. A black-and-white ArUco
+marker on the dock backboard provides the final camera reference. The map poses
+are stored in
 `src/companion_robot_behaviors/config/docking.yaml`:
 
 | Pose | X | Y | Yaw | Purpose |
@@ -288,11 +300,14 @@ ros2 service call /dock_robot std_srvs/srv/Trigger "{}"
 ```
 
 Nav2 first drives the robot to the staging marker. The precision controller then
-takes over `/cmd_vel`, aligns the robot with the dock, follows its centreline,
-and reverses slowly between the guides. The rear LiDAR sector stops the approach
-if an unexpected object is detected. A no-progress timeout reports `ERROR`
-instead of leaving the robot stuck in precision docking. Do not run patrol or
-WASD control at the same time.
+takes over `/cmd_vel`, acquires the ArUco marker through the rear camera, and
+reverses slowly while correcting its lateral error. The saved map pose is kept
+as an independent final-position cross-check, and the rear LiDAR remains the
+emergency stop sensor. If the marker disappears, the robot stops immediately.
+After a sustained loss it retreats to staging and retries within the configured
+recovery limit. A disagreement between camera and map, an obstacle, or a
+no-progress timeout reports `ERROR`. Do not run patrol or WASD control at the
+same time.
 
 The current docking state is published as a transient-local string, so a new
 terminal can inspect the latest value at any time:
@@ -303,9 +318,27 @@ ros2 topic echo /docking_status std_msgs/msg/String \
 ```
 
 The expected docking sequence is `IDLE`, `WAITING_FOR_NAV2`,
-`NAVIGATING_TO_STAGING`, `ALIGNING_WITH_DOCK`, `PRECISION_DOCKING`, `DOCKED`,
-and `CHARGING`.
+`NAVIGATING_TO_STAGING`, `ALIGNING_WITH_DOCK`, `ACQUIRING_DOCK_MARKER`,
+`PRECISION_DOCKING`, `DOCKED`, and `CHARGING`. A sustained camera interruption
+temporarily changes the docking state to `RECOVERING_DOCK_MARKER`.
 When the battery reaches full capacity, the final state is `FULLY_CHARGED`.
+
+The detector itself publishes `WAITING_FOR_CAMERA`, `SEARCHING`, `DETECTED`,
+`OCCLUDED`, or `LOST` on `/dock_marker/status`. `OCCLUDED` means that a recent
+detection was interrupted briefly; `LOST` means the timeout was exceeded.
+
+### Inspect the Dock Camera in RViz
+
+The detector publishes two RViz-compatible views. In RViz, choose **Add**, then:
+
+1. Add an **Image** display and select `/dock_marker/debug_image` to see the
+   camera image, detected outline, axes, and current detector status.
+2. Add a **Marker** display and select `/dock_marker/visualization` to see the
+   estimated marker pose in 3D.
+
+The raw image remains available on `/rear_camera/image_raw`. Camera inspection
+is optional; docking uses the same topics automatically when either
+`docking.launch.py` or `energy_patrol.launch.py` is running.
 
 ### Simulate Low Battery and Automatic Docking
 
@@ -379,6 +412,8 @@ Expected states include `INITIALIZING`, `IDLE`, `PATROLLING`,
 15 seconds, the manager cancels and replans the current waypoint. Navigation
 failures and failed low-battery docking cycles are retried up to the configured
 limits in `src/companion_robot_behaviors/config/mission.yaml`.
+The status snapshot also contains `dock_marker_status`, so camera perception can
+be checked without opening a separate image window.
 
 After inspecting and clearing the physical cause of a terminal `ERROR`, reset
 the recovery counters and request another attempt with:
@@ -428,6 +463,8 @@ whole session.
 | --- | --- | --- |
 | `/cmd_vel` | `geometry_msgs/msg/Twist` | Robot velocity command |
 | `/scan` | `sensor_msgs/msg/LaserScan` | Simulated 2D LiDAR scan |
+| `/rear_camera/image_raw` | `sensor_msgs/msg/Image` | Simulated rear RGB image |
+| `/rear_camera/camera_info` | `sensor_msgs/msg/CameraInfo` | Rear-camera calibration |
 | `/odom` | `nav_msgs/msg/Odometry` | Stable Gazebo pose odometry |
 | `/wheel_odom` | `nav_msgs/msg/Odometry` | Wheel-based odometry |
 | `/joint_states` | `sensor_msgs/msg/JointState` | Wheel joint states |
@@ -442,6 +479,11 @@ whole session.
 | `/recover_patrol` | `std_srvs/srv/Trigger` | Cancel and replan the current patrol goal |
 | `/set_moving_obstacle_enabled` | `std_srvs/srv/SetBool` | Pause or resume the moving obstacle |
 | `/docking_status` | `std_msgs/msg/String` | Latest docking state |
+| `/dock_marker/pose` | `geometry_msgs/msg/PoseStamped` | Marker pose relative to the rear camera |
+| `/dock_marker/visible` | `std_msgs/msg/Bool` | Whether the current image contains the marker |
+| `/dock_marker/confidence` | `std_msgs/msg/Float32` | Marker image-area confidence indicator |
+| `/dock_marker/status` | `std_msgs/msg/String` | Camera and marker detection state |
+| `/dock_marker/debug_image` | `sensor_msgs/msg/Image` | Annotated image for RViz diagnostics |
 | `/patrol_status` | `std_msgs/msg/String` | Latest waypoint-patrol state |
 | `/mission_status` | `std_msgs/msg/String` | Latest high-level mission state |
 | `/mission_detail` | `std_msgs/msg/String` | Human-readable explanation of the mission state |
@@ -456,7 +498,8 @@ topic remains available for later wheel-slip and encoder-odometry experiments.
 - Improve AMCL robustness with noisier odometry
 - Tune costmaps and the local controller for tighter spaces
 - Add mission-state visualization and diagnostics in RViz
-- Add camera perception
+- Test visual docking under stronger camera noise and partial occlusion
+- Add person detection and human-following companion behaviour
 - Transfer the software stack to physical hardware
 
 ## License

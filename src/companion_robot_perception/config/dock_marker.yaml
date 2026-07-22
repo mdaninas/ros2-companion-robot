@@ -1,0 +1,10 @@
+dock_marker_detector:
+  ros__parameters:
+    image_topic: /rear_camera/image_raw
+    camera_info_topic: /rear_camera/camera_info
+    optical_frame: rear_camera_optical_frame
+    dictionary: "DICT_4X4_50"
+    marker_id: 0
+    marker_size: 0.12
+    detection_timeout: 0.60
+    debug_image_enabled: true

@@ -465,6 +465,38 @@
     material_name="accent_cyan"
     rgba_value="0.00 0.78 0.95 1.0"/>
 
+  <!-- Rear camera watches the docking marker while the robot reverses. -->
+  <link name="rear_camera_link">
+    <visual name="rear_camera_housing">
+      <geometry>
+        <box size="0.055 0.075 0.045"/>
+      </geometry>
+      <xacro:apply_material material_name="sensor_dark" rgba_value="0.08 0.10 0.13 1.0"/>
+    </visual>
+  </link>
+  <joint name="rear_camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="rear_camera_link"/>
+    <origin xyz="-0.040 0 0.330" rpy="0 0 ${pi}"/>
+  </joint>
+  <xacro:fixed_cylinder_visual
+    name="rear_camera_lens"
+    parent="rear_camera_link"
+    xyz="0.033 0 0"
+    rpy="0 ${pi / 2.0} 0"
+    radius="0.014"
+    length="0.012"
+    material_name="lens_glass"
+    rgba_value="0.01 0.12 0.18 1.0"/>
+
+  <!-- ROS optical convention: +Z forward, +X right, +Y down. -->
+  <link name="rear_camera_optical_frame"/>
+  <joint name="rear_camera_optical_joint" type="fixed">
+    <parent link="rear_camera_link"/>
+    <child link="rear_camera_optical_frame"/>
+    <origin xyz="0.033 0 0" rpy="${-pi / 2.0} 0 ${-pi / 2.0}"/>
+  </joint>
+
   <!-- IMU frame is centered inside the chassis and intentionally has no geometry. -->
   <link name="imu_link"/>
   <joint name="imu_joint" type="fixed">
@@ -502,6 +534,34 @@
           <stddev>0.005</stddev>
         </noise>
       </lidar>
+    </sensor>
+  </gazebo>
+
+  <gazebo reference="rear_camera_link">
+    <sensor name="rear_docking_camera" type="camera">
+      <pose>0.033 0 0 0 0 0</pose>
+      <topic>/rear_camera</topic>
+      <gz_frame_id>rear_camera_optical_frame</gz_frame_id>
+      <update_rate>15</update_rate>
+      <always_on>true</always_on>
+      <visualize>false</visualize>
+      <camera>
+        <horizontal_fov>1.3962634</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.04</near>
+          <far>5.0</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.002</stddev>
+        </noise>
+      </camera>
     </sensor>
   </gazebo>
 

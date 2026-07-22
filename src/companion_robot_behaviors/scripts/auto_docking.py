@@ -7,7 +7,7 @@ import time
 
 import rclpy
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseStamped, Twist
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
 from rclpy.executors import ExternalShutdownException
@@ -15,7 +15,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import BatteryState, LaserScan
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -34,7 +34,9 @@ class AutoDocking(Node):
     WAITING_FOR_NAV2 = "WAITING_FOR_NAV2"
     NAVIGATING_TO_STAGING = "NAVIGATING_TO_STAGING"
     ALIGNING_WITH_DOCK = "ALIGNING_WITH_DOCK"
+    ACQUIRING_DOCK_MARKER = "ACQUIRING_DOCK_MARKER"
     PRECISION_DOCKING = "PRECISION_DOCKING"
+    RECOVERING_DOCK_MARKER = "RECOVERING_DOCK_MARKER"
     DOCKED = "DOCKED"
     CHARGING = "CHARGING"
     FULLY_CHARGED = "FULLY_CHARGED"
@@ -78,6 +80,19 @@ class AutoDocking(Node):
         self.declare_parameter("front_stop_distance", 0.28)
         self.declare_parameter("sensor_timeout", 1.0)
         self.declare_parameter("min_undock_battery", 0.50)
+        self.declare_parameter("visual_docking_enabled", True)
+        self.declare_parameter("marker_pose_topic", "/dock_marker/pose")
+        self.declare_parameter("marker_visible_topic", "/dock_marker/visible")
+        self.declare_parameter("marker_acquisition_timeout", 6.0)
+        self.declare_parameter("marker_pose_timeout", 0.60)
+        self.declare_parameter("marker_loss_timeout", 1.50)
+        self.declare_parameter("marker_target_distance", 0.18)
+        self.declare_parameter("marker_distance_tolerance", 0.025)
+        self.declare_parameter("marker_lateral_tolerance", 0.025)
+        self.declare_parameter("visual_lateral_gain", 3.00)
+        self.declare_parameter("visual_global_position_tolerance", 0.16)
+        self.declare_parameter("marker_recovery_limit", 2)
+        self.declare_parameter("marker_recovery_timeout", 20.0)
 
         self.frame_id = self.get_parameter("frame_id").value
         self.robot_frame = self.get_parameter("robot_frame").value
@@ -199,6 +214,55 @@ class AutoDocking(Node):
             0.0,
             1.0,
         )
+        self.visual_docking_enabled = bool(
+            self.get_parameter("visual_docking_enabled").value
+        )
+        marker_pose_topic = str(
+            self.get_parameter("marker_pose_topic").value
+        )
+        marker_visible_topic = str(
+            self.get_parameter("marker_visible_topic").value
+        )
+        self.marker_acquisition_timeout = max(
+            1.0,
+            float(self.get_parameter("marker_acquisition_timeout").value),
+        )
+        self.marker_pose_timeout = max(
+            0.1, float(self.get_parameter("marker_pose_timeout").value)
+        )
+        self.marker_loss_timeout = max(
+            self.marker_pose_timeout,
+            float(self.get_parameter("marker_loss_timeout").value),
+        )
+        self.marker_target_distance = max(
+            0.05, float(self.get_parameter("marker_target_distance").value)
+        )
+        self.marker_distance_tolerance = max(
+            0.005,
+            float(self.get_parameter("marker_distance_tolerance").value),
+        )
+        self.marker_lateral_tolerance = max(
+            0.005,
+            float(self.get_parameter("marker_lateral_tolerance").value),
+        )
+        self.visual_lateral_gain = max(
+            0.0, float(self.get_parameter("visual_lateral_gain").value)
+        )
+        self.visual_global_position_tolerance = max(
+            self.contact_position_tolerance,
+            float(
+                self.get_parameter(
+                    "visual_global_position_tolerance"
+                ).value
+            ),
+        )
+        self.marker_recovery_limit = max(
+            0, int(self.get_parameter("marker_recovery_limit").value)
+        )
+        self.marker_recovery_timeout = max(
+            5.0,
+            float(self.get_parameter("marker_recovery_timeout").value),
+        )
 
         self.action_client = ActionClient(
             self, NavigateToPose, "/navigate_to_pose"
@@ -216,6 +280,18 @@ class AutoDocking(Node):
         )
         self.battery_subscription = self.create_subscription(
             BatteryState, "/battery_state", self._battery_callback, 10
+        )
+        self.marker_pose_subscription = self.create_subscription(
+            PoseStamped,
+            marker_pose_topic,
+            self._marker_pose_callback,
+            10,
+        )
+        self.marker_visible_subscription = self.create_subscription(
+            Bool,
+            marker_visible_topic,
+            self._marker_visible_callback,
+            10,
         )
         self.dock_service = self.create_service(
             Trigger, "/dock_robot", self._handle_dock_request
@@ -238,6 +314,11 @@ class AutoDocking(Node):
         self.last_control_log_at = 0.0
         self.best_dock_distance = math.inf
         self.last_dock_progress_at = time.monotonic()
+        self.marker_visible = False
+        self.marker_pose = None
+        self.last_marker_at = None
+        self.marker_seen_in_cycle = False
+        self.marker_recovery_attempts = 0
 
         self.control_timer = self.create_timer(
             1.0 / self.controller_frequency, self._control_loop
@@ -258,6 +339,8 @@ class AutoDocking(Node):
             return
         self.state = state
         self.state_started_at = time.monotonic()
+        if state == self.ACQUIRING_DOCK_MARKER:
+            self.marker_seen_in_cycle = False
         if state == self.PRECISION_DOCKING:
             self.best_dock_distance = math.inf
             self.last_dock_progress_at = self.state_started_at
@@ -283,6 +366,7 @@ class AutoDocking(Node):
             return response
 
         self.active_goal_handle = None
+        self.marker_recovery_attempts = 0
         self._set_state(
             self.WAITING_FOR_NAV2,
             "Docking requested; waiting for Nav2.",
@@ -348,8 +432,12 @@ class AutoDocking(Node):
             self._wait_for_nav2()
         elif self.state == self.ALIGNING_WITH_DOCK:
             self._run_dock_alignment()
+        elif self.state == self.ACQUIRING_DOCK_MARKER:
+            self._run_marker_acquisition()
         elif self.state == self.PRECISION_DOCKING:
             self._run_precision_docking()
+        elif self.state == self.RECOVERING_DOCK_MARKER:
+            self._run_marker_recovery()
         elif self.state == self.UNDOCKING:
             self._run_precision_undocking()
 
@@ -454,6 +542,30 @@ class AutoDocking(Node):
         self.front_range = front_closest
         self.last_scan_at = time.monotonic()
 
+    def _marker_pose_callback(self, marker_pose):
+        position = marker_pose.pose.position
+        if not all(
+            math.isfinite(value)
+            for value in (position.x, position.y, position.z)
+        ):
+            return
+        self.marker_pose = (position.x, position.y, position.z)
+        self.last_marker_at = time.monotonic()
+
+    def _marker_visible_callback(self, visible):
+        self.marker_visible = bool(visible.data)
+
+    def _current_marker_measurement(self):
+        if (
+            not self.marker_visible
+            or self.marker_pose is None
+            or self.last_marker_at is None
+            or time.monotonic() - self.last_marker_at
+            > self.marker_pose_timeout
+        ):
+            return None
+        return self.marker_pose
+
     def _robot_pose(self):
         try:
             transform = self.tf_buffer.lookup_transform(
@@ -506,6 +618,12 @@ class AutoDocking(Node):
 
         if now - self.state_started_at > self.precision_docking_timeout:
             self._fail("Precision docking exceeded its time limit.")
+            return
+
+        if self.visual_docking_enabled:
+            self._run_visual_precision_docking(
+                pose, distance, final_yaw_error, now
+            )
             return
 
         if distance < (
@@ -592,6 +710,224 @@ class AutoDocking(Node):
                 f"rear_range={self.rear_range:.2f} m"
             )
 
+    def _run_visual_precision_docking(
+        self, pose, global_distance, final_yaw_error, now
+    ):
+        marker = self._current_marker_measurement()
+        if marker is None:
+            self._stop_robot()
+            marker_age = (
+                math.inf
+                if self.last_marker_at is None
+                else now - self.last_marker_at
+            )
+            if marker_age > self.marker_loss_timeout:
+                self._begin_marker_recovery(
+                    "Dock marker was lost during the precision approach."
+                )
+            return
+
+        self.marker_seen_in_cycle = True
+        marker_right, marker_down, marker_forward = marker
+        if marker_forward <= 0.0:
+            self._fail("Dock marker pose is behind the rear camera.")
+            return
+
+        distance_error = marker_forward - self.marker_target_distance
+        progress_error = max(0.0, distance_error) + abs(marker_right)
+        if progress_error < (
+            self.best_dock_distance - self.progress_distance_epsilon
+        ):
+            self.best_dock_distance = progress_error
+            self.last_dock_progress_at = now
+        elif now - self.last_dock_progress_at > self.progress_timeout:
+            self._fail(
+                "Visual docking is not making progress; "
+                "the robot may be blocked or misaligned."
+            )
+            return
+
+        marker_aligned = (
+            abs(distance_error) <= self.marker_distance_tolerance
+            and abs(marker_right) <= self.marker_lateral_tolerance
+        )
+        global_pose_safe = (
+            global_distance <= self.visual_global_position_tolerance
+            and abs(final_yaw_error) <= self.dock_yaw_tolerance
+        )
+        if marker_aligned and global_pose_safe:
+            self._complete_docking(global_distance, final_yaw_error)
+            return
+
+        if marker_aligned and not global_pose_safe:
+            self._fail(
+                "Camera and map disagree about the final dock pose; "
+                "docking stopped for recovery."
+            )
+            return
+
+        if self.rear_range <= self.rear_stop_distance:
+            self._fail(
+                "Rear obstacle detected before visual docking completed."
+            )
+            return
+
+        if distance_error < -self.marker_distance_tolerance:
+            self._fail("Robot moved past the visual docking target.")
+            return
+
+        _, _, yaw = pose
+        dock_yaw = self.dock_pose[2]
+        lateral_correction = clamp(
+            -self.visual_lateral_gain * marker_right,
+            -self.max_lateral_heading_correction,
+            self.max_lateral_heading_correction,
+        )
+        desired_robot_yaw = normalize_angle(dock_yaw + lateral_correction)
+        heading_error = normalize_angle(desired_robot_yaw - yaw)
+
+        linear_x = 0.0
+        if distance_error > self.marker_distance_tolerance:
+            speed = clamp(
+                self.linear_gain * distance_error,
+                self.min_reverse_speed,
+                self.max_reverse_speed,
+            )
+            linear_x = -speed
+            if abs(heading_error) > self.heading_stop_angle:
+                linear_x = 0.0
+
+        angular_z = clamp(
+            self.angular_gain * heading_error,
+            -self.max_angular_speed,
+            self.max_angular_speed,
+        )
+        command = Twist()
+        command.linear.x = linear_x
+        command.angular.z = angular_z
+        self.cmd_vel_publisher.publish(command)
+
+        if now - self.last_control_log_at >= 1.0:
+            self.last_control_log_at = now
+            self.get_logger().info(
+                "Visual dock approach: "
+                f"marker_forward={marker_forward:.2f} m, "
+                f"marker_right={marker_right:.2f} m, "
+                f"marker_down={marker_down:.2f} m, "
+                f"heading_error={heading_error:.2f} rad, "
+                f"rear_range={self.rear_range:.2f} m"
+            )
+
+    def _run_marker_acquisition(self):
+        self._stop_robot()
+        marker = self._current_marker_measurement()
+        if marker is not None:
+            self.marker_seen_in_cycle = True
+            self._set_state(
+                self.PRECISION_DOCKING,
+                "Dock marker acquired; starting camera-guided reverse "
+                "approach.",
+            )
+            return
+
+        if (
+            time.monotonic() - self.state_started_at
+            > self.marker_acquisition_timeout
+        ):
+            self._fail(
+                "Dock marker was not acquired at the staging pose; "
+                "docking stopped for recovery."
+            )
+
+    def _begin_marker_recovery(self, reason):
+        self._stop_robot()
+        self.marker_recovery_attempts += 1
+        if self.marker_recovery_attempts > self.marker_recovery_limit:
+            self._fail(
+                f"{reason} Visual recovery limit was exceeded."
+            )
+            return
+        self._set_state(
+            self.RECOVERING_DOCK_MARKER,
+            f"{reason} Retreating to staging for visual recovery "
+            f"({self.marker_recovery_attempts}/"
+            f"{self.marker_recovery_limit}).",
+        )
+
+    def _run_marker_recovery(self):
+        now = time.monotonic()
+        if (
+            self.last_scan_at is None
+            or now - self.last_scan_at > self.sensor_timeout
+        ):
+            self._stop_robot()
+            if now - self.state_started_at > self.sensor_timeout:
+                self._fail(
+                    "Front LiDAR data is unavailable during visual recovery."
+                )
+            return
+
+        pose = self._robot_pose()
+        if pose is None:
+            self._stop_robot()
+            if now - self.state_started_at > self.sensor_timeout:
+                self._fail(
+                    "Robot pose is unavailable during visual recovery."
+                )
+            return
+
+        if now - self.state_started_at > self.marker_recovery_timeout:
+            self._fail("Visual docking recovery exceeded its time limit.")
+            return
+
+        x, y, yaw = pose
+        staging_x, staging_y, _ = self.staging_pose
+        delta_x = staging_x - x
+        delta_y = staging_y - y
+        distance = math.hypot(delta_x, delta_y)
+        if distance <= self.staging_position_tolerance:
+            self._stop_robot()
+            self._set_state(
+                self.ALIGNING_WITH_DOCK,
+                "Visual recovery reached staging; realigning with the dock.",
+            )
+            return
+
+        if self.front_range <= self.front_stop_distance:
+            self._fail(
+                "Front obstacle detected during visual docking recovery."
+            )
+            return
+
+        travel_heading = math.atan2(delta_y, delta_x)
+        heading_error = normalize_angle(travel_heading - yaw)
+        speed = clamp(
+            self.linear_gain * distance,
+            self.min_forward_speed,
+            self.max_forward_speed,
+        )
+        linear_x = speed
+        if abs(heading_error) > self.heading_stop_angle:
+            linear_x = 0.0
+
+        command = Twist()
+        command.linear.x = linear_x
+        command.angular.z = clamp(
+            self.angular_gain * heading_error,
+            -self.max_angular_speed,
+            self.max_angular_speed,
+        )
+        self.cmd_vel_publisher.publish(command)
+
+        if now - self.last_control_log_at >= 1.0:
+            self.last_control_log_at = now
+            self.get_logger().info(
+                "Visual recovery retreat: "
+                f"staging_distance={distance:.2f} m, "
+                f"heading_error={heading_error:.2f} rad, "
+                f"front_range={self.front_range:.2f} m"
+            )
+
     def _run_dock_alignment(self):
         pose = self._robot_pose()
         if pose is None:
@@ -605,10 +941,17 @@ class AutoDocking(Node):
         yaw_error = normalize_angle(dock_yaw - yaw)
         if abs(yaw_error) <= self.alignment_yaw_tolerance:
             self._stop_robot()
-            self._set_state(
-                self.PRECISION_DOCKING,
-                "Dock alignment complete; starting slow reverse approach.",
-            )
+            if self.visual_docking_enabled:
+                self._set_state(
+                    self.ACQUIRING_DOCK_MARKER,
+                    "Dock alignment complete; acquiring the visual marker.",
+                )
+            else:
+                self._set_state(
+                    self.PRECISION_DOCKING,
+                    "Dock alignment complete; starting map-guided reverse "
+                    "approach.",
+                )
             return
 
         if time.monotonic() - self.state_started_at > self.alignment_timeout:
@@ -654,11 +997,18 @@ class AutoDocking(Node):
         distance = math.hypot(delta_x, delta_y)
         final_yaw_error = normalize_angle(staging_yaw - yaw)
 
-        if (
-            distance <= self.staging_position_tolerance
-            and abs(final_yaw_error) <= self.dock_yaw_tolerance
-        ):
-            self._complete_undocking(distance, final_yaw_error)
+        if distance <= self.staging_position_tolerance:
+            if abs(final_yaw_error) <= self.dock_yaw_tolerance:
+                self._complete_undocking(distance, final_yaw_error)
+                return
+
+            command = Twist()
+            command.angular.z = clamp(
+                self.angular_gain * final_yaw_error,
+                -self.max_angular_speed,
+                self.max_angular_speed,
+            )
+            self.cmd_vel_publisher.publish(command)
             return
 
         if self.front_range <= self.front_stop_distance:

@@ -48,5 +48,21 @@ docking_behavior:
     front_stop_distance: 0.28
     sensor_timeout: 1.0
 
+    # The rear camera takes over after Nav2 reaches the staging pose. The map
+    # pose remains a cross-check and LiDAR remains the emergency stop sensor.
+    visual_docking_enabled: true
+    marker_pose_topic: /dock_marker/pose
+    marker_visible_topic: /dock_marker/visible
+    marker_acquisition_timeout: 6.0
+    marker_pose_timeout: 0.60
+    marker_loss_timeout: 1.50
+    marker_target_distance: 0.15
+    marker_distance_tolerance: 0.025
+    marker_lateral_tolerance: 0.025
+    visual_lateral_gain: 3.00
+    visual_global_position_tolerance: 0.16
+    marker_recovery_limit: 2
+    marker_recovery_timeout: 20.0
+
     # Undocking is blocked until the simulated battery reaches this level.
     min_undock_battery: 0.50

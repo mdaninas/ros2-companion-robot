@@ -12,6 +12,7 @@ def generate_launch_description():
     # Keep this name distinct from arena.launch.py's use_rviz argument.
     # Launch configurations share a context across included launch files.
     open_rviz = LaunchConfiguration("open_rviz")
+    headless = LaunchConfiguration("headless")
     autostart = LaunchConfiguration("autostart")
     map_yaml = LaunchConfiguration("map")
     params_file = LaunchConfiguration("params_file")
@@ -34,7 +35,10 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([gazebo_share, "launch", "arena.launch.py"])
         ),
-        launch_arguments={"use_rviz": "false"}.items(),
+        launch_arguments={
+            "use_rviz": "false",
+            "headless": headless,
+        }.items(),
     )
 
     common_parameters = [params_file, {"use_sim_time": True}]
@@ -171,6 +175,11 @@ def generate_launch_description():
                 "open_rviz",
                 default_value="true",
                 description="Open RViz with the Nav2 default view.",
+            ),
+            DeclareLaunchArgument(
+                "headless",
+                default_value="false",
+                description="Run Gazebo without its 3D window.",
             ),
             DeclareLaunchArgument(
                 "autostart",

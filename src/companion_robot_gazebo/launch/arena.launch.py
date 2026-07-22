@@ -2,7 +2,12 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    Command,
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -11,6 +16,7 @@ from launch.substitutions import FindExecutable
 
 def generate_launch_description():
     use_rviz = LaunchConfiguration("use_rviz")
+    headless = LaunchConfiguration("headless")
     moving_obstacle = LaunchConfiguration("moving_obstacle")
     moving_obstacle_params = LaunchConfiguration("moving_obstacle_params")
 
@@ -41,7 +47,16 @@ def generate_launch_description():
             PathJoinSubstitution([ros_gz_sim_share, "launch", "gz_sim.launch.py"])
         ),
         # Quote the world path so workspaces containing spaces are supported.
-        launch_arguments={"gz_args": ["-r -v 3 \"", world_file, "\""]}.items(),
+        launch_arguments={
+            "gz_args": [
+                PythonExpression(
+                    ["'-s ' if '", headless, "' == 'true' else ''"]
+                ),
+                "-r -v 3 \"",
+                world_file,
+                "\"",
+            ]
+        }.items(),
     )
 
     robot_state_publisher = Node(
@@ -79,6 +94,9 @@ def generate_launch_description():
             "/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V",
             # Gazebo -> ROS 360-degree LiDAR scan.
             "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
+            # Gazebo -> ROS rear docking camera and calibration.
+            "/rear_camera@sensor_msgs/msg/Image[gz.msgs.Image",
+            "/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo",
             # Gazebo -> ROS wheel joint positions.
             (
                 "/world/companion_arena/model/companion_robot/joint_state"
@@ -86,6 +104,8 @@ def generate_launch_description():
             ),
         ],
         remappings=[
+            ("/rear_camera", "/rear_camera/image_raw"),
+            ("/camera_info", "/rear_camera/camera_info"),
             (
                 "/world/companion_arena/model/companion_robot/joint_state",
                 "/joint_states",
@@ -146,6 +166,11 @@ def generate_launch_description():
                 "use_rviz",
                 default_value="true",
                 description="Open RViz with the robot and LiDAR scan displays.",
+            ),
+            DeclareLaunchArgument(
+                "headless",
+                default_value="false",
+                description="Run only the Gazebo server without its 3D window.",
             ),
             DeclareLaunchArgument(
                 "moving_obstacle",

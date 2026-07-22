@@ -40,7 +40,9 @@ class MissionManager(Node):
         "WAITING_FOR_NAV2",
         "NAVIGATING_TO_STAGING",
         "ALIGNING_WITH_DOCK",
+        "ACQUIRING_DOCK_MARKER",
         "PRECISION_DOCKING",
+        "RECOVERING_DOCK_MARKER",
     }
     CHARGING_STATES = {"DOCKED", "CHARGING"}
 
@@ -144,6 +146,12 @@ class MissionManager(Node):
             self._patrol_status_callback,
             latched_qos,
         )
+        self.marker_subscription = self.create_subscription(
+            String,
+            "/dock_marker/status",
+            self._marker_status_callback,
+            latched_qos,
+        )
         self.odom_subscription = self.create_subscription(
             Odometry, "/odom", self._odom_callback, 20
         )
@@ -168,6 +176,7 @@ class MissionManager(Node):
         self.battery_percentage = None
         self.docking_status = "UNKNOWN"
         self.patrol_status = "UNKNOWN"
+        self.marker_status = "UNKNOWN"
         self.full_charge_started_at = None
         self.dock_cycle_active = False
         self.dock_future = None
@@ -239,6 +248,11 @@ class MissionManager(Node):
         if state:
             self.patrol_status = state
 
+    def _marker_status_callback(self, message):
+        state = message.data.strip().upper()
+        if state:
+            self.marker_status = state
+
     def _odom_callback(self, odometry):
         position = odometry.pose.pose.position
         yaw = yaw_from_quaternion(odometry.pose.pose.orientation)
@@ -276,6 +290,7 @@ class MissionManager(Node):
             self.battery_percentage is None
             or self.docking_status == "UNKNOWN"
             or self.patrol_status == "UNKNOWN"
+            or self.marker_status == "UNKNOWN"
         ):
             self._set_state(
                 "INITIALIZING",
@@ -286,7 +301,8 @@ class MissionManager(Node):
         if self.docking_status in self.DOCKING_STATES:
             self._set_state(
                 "DOCKING",
-                f"Docking subsystem: {self.docking_status}.",
+                f"Docking subsystem: {self.docking_status}; "
+                f"marker: {self.marker_status}.",
             )
             return
 
@@ -528,6 +544,7 @@ class MissionManager(Node):
             "battery_percentage": self.battery_percentage,
             "patrol_status": self.patrol_status,
             "docking_status": self.docking_status,
+            "dock_marker_status": self.marker_status,
             "patrol_recovery_attempts": self.patrol_recovery_attempts,
             "docking_recovery_attempts": self.docking_recovery_attempts,
         }
