@@ -82,6 +82,7 @@ def generate_launch_description():
         name="controller_server",
         output="screen",
         parameters=common_parameters,
+        remappings=[("cmd_vel", "/cmd_vel_nav")],
     )
 
     planner_server = Node(
@@ -96,6 +97,15 @@ def generate_launch_description():
         package="nav2_behaviors",
         executable="behavior_server",
         name="behavior_server",
+        output="screen",
+        parameters=common_parameters,
+        remappings=[("cmd_vel", "/cmd_vel_nav")],
+    )
+
+    collision_monitor = Node(
+        package="nav2_collision_monitor",
+        executable="collision_monitor",
+        name="collision_monitor",
         output="screen",
         parameters=common_parameters,
     )
@@ -122,6 +132,7 @@ def generate_launch_description():
                     "planner_server",
                     "behavior_server",
                     "bt_navigator",
+                    "collision_monitor",
                 ],
             }
         ],
@@ -149,6 +160,7 @@ def generate_launch_description():
             planner_server,
             behavior_server,
             bt_navigator,
+            collision_monitor,
             navigation_manager,
         ],
     )

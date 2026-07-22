@@ -107,10 +107,10 @@ controller_server:
       decel_lim_x: -0.50
       decel_lim_y: 0.0
       decel_lim_theta: -1.50
-      vx_samples: 20
+      vx_samples: 24
       vy_samples: 1
-      vtheta_samples: 30
-      sim_time: 1.7
+      vtheta_samples: 36
+      sim_time: 2.0
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 0.2
@@ -126,11 +126,13 @@ controller_server:
         - PathAlign
         - PathDist
         - GoalDist
-      BaseObstacle.scale: 0.02
-      PathAlign.scale: 24.0
-      GoalAlign.scale: 20.0
-      PathDist.scale: 32.0
-      GoalDist.scale: 24.0
+      # Give collision-free trajectories more weight while retaining enough
+      # path freedom to steer around a temporary LiDAR obstacle.
+      BaseObstacle.scale: 0.05
+      PathAlign.scale: 20.0
+      GoalAlign.scale: 16.0
+      PathDist.scale: 28.0
+      GoalDist.scale: 20.0
       RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
@@ -139,13 +141,14 @@ local_costmap:
   local_costmap:
     ros__parameters:
       update_frequency: 10.0
-      publish_frequency: 5.0
+      publish_frequency: 10.0
       global_frame: odom
       robot_base_frame: base_footprint
       rolling_window: true
-      width: 3
-      height: 3
+      width: 4
+      height: 4
       resolution: 0.05
+      transform_tolerance: 0.3
       footprint: "[[0.21, 0.18], [0.21, -0.18], [-0.21, -0.18], [-0.21, 0.18]]"
       footprint_padding: 0.02
       plugins: [obstacle_layer, inflation_layer]
@@ -159,6 +162,7 @@ local_costmap:
           data_type: LaserScan
           clearing: true
           marking: true
+          observation_persistence: 0.0
           max_obstacle_height: 2.0
           raytrace_min_range: 0.12
           raytrace_max_range: 8.0
@@ -166,15 +170,15 @@ local_costmap:
           obstacle_max_range: 7.5
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        inflation_radius: 0.38
-        cost_scaling_factor: 5.0
+        inflation_radius: 0.48
+        cost_scaling_factor: 4.0
       always_send_full_costmap: true
 
 global_costmap:
   global_costmap:
     ros__parameters:
-      update_frequency: 2.0
-      publish_frequency: 1.0
+      update_frequency: 5.0
+      publish_frequency: 2.0
       global_frame: map
       robot_base_frame: base_footprint
       resolution: 0.05
@@ -195,6 +199,7 @@ global_costmap:
           data_type: LaserScan
           clearing: true
           marking: true
+          observation_persistence: 0.0
           max_obstacle_height: 2.0
           raytrace_min_range: 0.12
           raytrace_max_range: 8.0
@@ -205,6 +210,104 @@ global_costmap:
         inflation_radius: 0.38
         cost_scaling_factor: 5.0
       always_send_full_costmap: true
+
+collision_monitor:
+  ros__parameters:
+    base_frame_id: base_footprint
+    odom_frame_id: odom
+    cmd_vel_in_topic: /cmd_vel_nav
+    cmd_vel_out_topic: /cmd_vel
+    state_topic: /collision_monitor_state
+    transform_tolerance: 0.2
+    source_timeout: 0.5
+    base_shift_correction: true
+    # Stop publishing quickly after Nav2 releases velocity control so the
+    # precision docking controller can use /cmd_vel without contention.
+    stop_pub_timeout: 0.2
+    polygons:
+      - EmergencyFront
+      - EmergencyRear
+      - EmergencyLeft
+      - EmergencyRight
+      - SlowdownFront
+      - SlowdownRear
+      - SlowdownLeft
+      - SlowdownRight
+    # Four sectors form a 360-degree safety ring while leaving the robot's
+    # own footprint outside every polygon to avoid self-detection.
+    EmergencyFront:
+      type: polygon
+      points: "[[0.52, 0.34], [0.52, -0.34], [0.24, -0.34], [0.24, 0.34]]"
+      action_type: stop
+      min_points: 4
+      visualize: true
+      polygon_pub_topic: /collision_monitor/emergency_front
+      enabled: true
+    EmergencyRear:
+      type: polygon
+      points: "[[-0.24, 0.34], [-0.24, -0.34], [-0.48, -0.34], [-0.48, 0.34]]"
+      action_type: stop
+      min_points: 4
+      visualize: true
+      polygon_pub_topic: /collision_monitor/emergency_rear
+      enabled: true
+    EmergencyLeft:
+      type: polygon
+      points: "[[-0.48, 0.40], [-0.48, 0.22], [0.52, 0.22], [0.52, 0.40]]"
+      action_type: stop
+      min_points: 4
+      visualize: true
+      polygon_pub_topic: /collision_monitor/emergency_left
+      enabled: true
+    EmergencyRight:
+      type: polygon
+      points: "[[-0.48, -0.22], [-0.48, -0.40], [0.52, -0.40], [0.52, -0.22]]"
+      action_type: stop
+      min_points: 4
+      visualize: true
+      polygon_pub_topic: /collision_monitor/emergency_right
+      enabled: true
+    SlowdownFront:
+      type: polygon
+      points: "[[0.95, 0.55], [0.95, -0.55], [0.24, -0.55], [0.24, 0.55]]"
+      action_type: slowdown
+      min_points: 4
+      slowdown_ratio: 0.35
+      visualize: true
+      polygon_pub_topic: /collision_monitor/slowdown_front
+      enabled: true
+    SlowdownRear:
+      type: polygon
+      points: "[[-0.24, 0.55], [-0.24, -0.55], [-0.75, -0.55], [-0.75, 0.55]]"
+      action_type: slowdown
+      min_points: 4
+      slowdown_ratio: 0.35
+      visualize: true
+      polygon_pub_topic: /collision_monitor/slowdown_rear
+      enabled: true
+    SlowdownLeft:
+      type: polygon
+      points: "[[-0.75, 0.62], [-0.75, 0.22], [0.95, 0.22], [0.95, 0.62]]"
+      action_type: slowdown
+      min_points: 4
+      slowdown_ratio: 0.35
+      visualize: true
+      polygon_pub_topic: /collision_monitor/slowdown_left
+      enabled: true
+    SlowdownRight:
+      type: polygon
+      points: "[[-0.75, -0.22], [-0.75, -0.62], [0.95, -0.62], [0.95, -0.22]]"
+      action_type: slowdown
+      min_points: 4
+      slowdown_ratio: 0.35
+      visualize: true
+      polygon_pub_topic: /collision_monitor/slowdown_right
+      enabled: true
+    observation_sources: [scan]
+    scan:
+      type: scan
+      topic: /scan
+      enabled: true
 
 planner_server:
   ros__parameters:

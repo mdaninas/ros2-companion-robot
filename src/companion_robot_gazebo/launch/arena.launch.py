@@ -11,6 +11,8 @@ from launch.substitutions import FindExecutable
 
 def generate_launch_description():
     use_rviz = LaunchConfiguration("use_rviz")
+    moving_obstacle = LaunchConfiguration("moving_obstacle")
+    moving_obstacle_params = LaunchConfiguration("moving_obstacle_params")
 
     description_share = FindPackageShare("companion_robot_description")
     gazebo_share = FindPackageShare("companion_robot_gazebo")
@@ -24,6 +26,9 @@ def generate_launch_description():
     )
     rviz_config = PathJoinSubstitution(
         [gazebo_share, "rviz", "simulation.rviz"]
+    )
+    default_moving_obstacle_params = PathJoinSubstitution(
+        [gazebo_share, "config", "moving_obstacle.yaml"]
     )
 
     robot_description = ParameterValue(
@@ -62,6 +67,12 @@ def generate_launch_description():
             "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
             # ROS -> Gazebo velocity commands.
             "/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist",
+            # ROS -> Gazebo velocity for the pedestrian's physical slide joint.
+            (
+                "/model/moving_pedestrian/joint/"
+                "pedestrian_slide_joint/cmd_vel"
+                "@std_msgs/msg/Float64]gz.msgs.Double"
+            ),
             # Gazebo -> ROS stable pose odometry, wheel odometry, and TF.
             "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
             "/wheel_odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
@@ -89,6 +100,15 @@ def generate_launch_description():
         output="screen",
         arguments=["-d", rviz_config],
         condition=IfCondition(use_rviz),
+    )
+
+    moving_obstacle_controller = Node(
+        package="companion_robot_gazebo",
+        executable="moving_obstacle_controller",
+        name="moving_obstacle_controller",
+        output="screen",
+        parameters=[moving_obstacle_params, {"use_sim_time": True}],
+        condition=IfCondition(moving_obstacle),
     )
 
     # Give the Gazebo server a moment to advertise its entity-creation service.
@@ -127,9 +147,20 @@ def generate_launch_description():
                 default_value="true",
                 description="Open RViz with the robot and LiDAR scan displays.",
             ),
+            DeclareLaunchArgument(
+                "moving_obstacle",
+                default_value="true",
+                description="Move the pedestrian dummy across the patrol route.",
+            ),
+            DeclareLaunchArgument(
+                "moving_obstacle_params",
+                default_value=default_moving_obstacle_params,
+                description="Moving-obstacle controller parameter file.",
+            ),
             gazebo,
             robot_state_publisher,
             bridge,
+            moving_obstacle_controller,
             rviz,
             spawn_robot,
         ]

@@ -1,0 +1,10 @@
+moving_obstacle_controller:
+  ros__parameters:
+    command_topic: /model/moving_pedestrian/joint/pedestrian_slide_joint/cmd_vel
+    robot_odom_topic: /odom
+    x: 0.80
+    y_min: -1.25
+    y_max: 1.25
+    speed: 0.22
+    update_rate: 10.0
+    robot_avoidance_distance: 0.70

@@ -178,6 +178,79 @@
     </model>
 
     <!--
+      A dynamic pedestrian dummy crosses the patrol route at x = 0.80 m.
+      A world-anchored prismatic joint keeps it upright and on its path while
+      Gazebo's physics engine still resolves contact with the robot.
+    -->
+    <model name="moving_pedestrian">
+      <static>false</static>
+      <allow_auto_disable>false</allow_auto_disable>
+      <pose>0.80 -1.25 0.45 0 0 1.5708</pose>
+      <link name="pedestrian_link">
+        <inertial>
+          <mass>20.0</mass>
+          <inertia>
+            <ixx>1.592</ixx>
+            <iyy>1.592</iyy>
+            <izz>0.484</izz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry>
+            <cylinder><radius>0.22</radius><length>0.90</length></cylinder>
+          </geometry>
+          <surface>
+            <friction>
+              <ode><mu>0.8</mu><mu2>0.8</mu2></ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="body_visual">
+          <geometry>
+            <cylinder><radius>0.22</radius><length>0.90</length></cylinder>
+          </geometry>
+          <material>
+            <ambient>0.42 0.04 0.62 1</ambient>
+            <diffuse>0.72 0.10 0.96 1</diffuse>
+            <specular>0.30 0.12 0.42 1</specular>
+          </material>
+        </visual>
+        <visual name="direction_band">
+          <pose>0 0 0.20 0 0 0</pose>
+          <geometry>
+            <cylinder><radius>0.225</radius><length>0.08</length></cylinder>
+          </geometry>
+          <material>
+            <ambient>0.95 0.62 0.03 1</ambient>
+            <diffuse>1.00 0.82 0.08 1</diffuse>
+            <emissive>0.20 0.08 0.00 1</emissive>
+          </material>
+        </visual>
+      </link>
+      <joint name="pedestrian_slide_joint" type="prismatic">
+        <parent>world</parent>
+        <child>pedestrian_link</child>
+        <axis>
+          <xyz expressed_in="__model__">1 0 0</xyz>
+          <limit>
+            <lower>0.0</lower>
+            <upper>2.5</upper>
+            <effort>500.0</effort>
+            <velocity>0.35</velocity>
+          </limit>
+          <dynamics>
+            <damping>0.2</damping>
+          </dynamics>
+        </axis>
+      </joint>
+      <plugin
+        filename="gz-sim-joint-controller-system"
+        name="gz::sim::systems::JointController">
+        <joint_name>pedestrian_slide_joint</joint_name>
+      </plugin>
+    </model>
+
+    <!--
       Reverse-entry docking station at the south side of the arena.
       The robot first faces north at the cyan staging marker, then reverses
       between the side guides until its centre reaches the green dock marker.

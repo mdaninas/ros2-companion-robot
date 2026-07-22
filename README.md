@@ -26,6 +26,8 @@ and energy-aware docking with Nav2.
 - Reverse-entry docking station with LiDAR-protected automatic docking
 - Energy-aware patrol with automatic low-battery docking, charging, undocking,
   and waypoint resumption
+- Moving pedestrian obstacle detected through LiDAR and the Nav2 costmaps
+- Nav2 360-degree collision slowdown and emergency-stop zones
 
 ## Current Status
 
@@ -45,6 +47,7 @@ and energy-aware docking with Nav2.
 | Battery and charging simulation | Initial implementation |
 | Low-battery docking trigger | Initial implementation |
 | Energy-aware patrol pause and resume | Initial implementation |
+| Dynamic obstacle avoidance | Initial implementation |
 | Physical robot deployment | Planned |
 
 ## Project Structure
@@ -359,6 +362,41 @@ staging pose, and then retries the saved waypoint before continuing its patrol.
 The launch repeats patrol loops indefinitely by default; pass `loop_count:=N`
 to use a finite number of loops.
 
+### Test a Moving Obstacle
+
+The arena contains a purple pedestrian dummy that continuously crosses the
+patrol route. Start autonomous navigation, waypoint patrol, or the complete
+energy-aware patrol normally. The LiDAR marks this model in both Nav2
+costmaps, allowing the local controller to slow down, stop, or select a clear
+trajectory around it.
+
+For a clear demonstration, run the energy-aware patrol and observe the local
+costmap in RViz:
+
+```bash
+ros2 launch companion_robot_behaviors energy_patrol.launch.py
+```
+
+The Collision Monitor receives only Nav2 velocity commands. Its 360-degree
+slowdown and emergency-stop envelopes protect the front, sides, and rear of
+the robot. It first reduces the requested speed and publishes zero velocity if
+an obstacle gets too close. Precision docking continues to use its separate
+front/rear LiDAR protection. The moving pedestrian uses a physics-constrained
+slide joint, so contact is resolved by Gazebo instead of passing through the
+robot. It also reverses before entering the robot's clearance zone, modelling
+a pedestrian that reacts instead of continuously pushing the robot.
+
+The moving obstacle can be paused for comparison with the static arena:
+
+```bash
+ros2 service call /set_moving_obstacle_enabled \
+  std_srvs/srv/SetBool "{data: false}"
+```
+
+Change `false` to `true` to resume it. Launch the arena with
+`moving_obstacle:=false` when the controller should remain disabled for the
+whole session.
+
 ## Main ROS Interfaces
 
 | Interface | Type | Purpose |
@@ -374,6 +412,7 @@ to use a finite number of loops.
 | `/dock_robot` | `std_srvs/srv/Trigger` | Start automatic docking |
 | `/undock_robot` | `std_srvs/srv/Trigger` | Leave the dock for the staging pose |
 | `/simulate_low_battery` | `std_srvs/srv/Trigger` | Trigger a low-battery demonstration |
+| `/set_moving_obstacle_enabled` | `std_srvs/srv/SetBool` | Pause or resume the moving obstacle |
 | `/docking_status` | `std_msgs/msg/String` | Latest docking state |
 | `/battery_state` | `sensor_msgs/msg/BatteryState` | Simulated charge and power status |
 
