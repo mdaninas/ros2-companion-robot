@@ -32,4 +32,10 @@ install(
   RENAME mission_manager
 )
 
+install(
+  PROGRAMS scripts/autonomy_diagnostics.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME autonomy_diagnostics
+)
+
 ament_package()

@@ -6,6 +6,8 @@ waypoint_patrol:
     retry_delay: 2.0
     max_goal_retries: 5
     energy_resume_delay: 1.0
+    # The action server may appear shortly before Nav2 finishes activation.
+    nav2_activation_delay: 1.5
 
     # Home pose contains x, y, and yaw (radians) in the map frame.
     home_pose: [0.0, 0.0, 0.0]

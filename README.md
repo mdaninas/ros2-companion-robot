@@ -2,11 +2,12 @@
 
 A mobile companion-rover simulation built with ROS 2 Jazzy and Gazebo
 Harmonic. The project covers the robot model, differential-drive motion, 2D
-LiDAR, a rear RGB camera, manual control, odometry, SLAM, and a saved occupancy
-map.
+LiDAR, a rear RGB camera, manual control, noisy simulation odometry, SLAM, and
+a saved occupancy map.
 
-The current milestone is autonomous localization, navigation, waypoint patrol,
-energy-aware docking, and mission-level recovery with Nav2.
+The current milestone is robust autonomous localization, navigation, waypoint
+patrol, energy-aware docking, mission-level recovery, and live RViz diagnostics
+with Nav2.
 
 ## Features
 
@@ -16,7 +17,7 @@ energy-aware docking, and mission-level recovery with Nav2.
 - Simulated 360-degree 2D LiDAR
 - Simulated rear RGB camera with ROS image and calibration topics
 - Safe terminal teleoperation using `W`, `A`, `S`, and `D`
-- Gazebo pose odometry on `/odom`
+- Gazebo pose odometry with modest measurement noise on `/odom`
 - Encoder-style wheel odometry on `/wheel_odom` for comparison
 - Online mapping with SLAM Toolbox
 - RViz configurations for the robot, simulation, and mapping
@@ -33,6 +34,10 @@ energy-aware docking, and mission-level recovery with Nav2.
 - Moving pedestrian obstacle detected through LiDAR and the Nav2 costmaps
 - Nav2 360-degree collision slowdown and emergency-stop zones
 - Central mission state manager with automatic patrol and docking recovery
+- Velocity smoothing for less abrupt autonomous motion under WSL
+- Two-stage AMCL recovery using a sensor refresh, then global relocalization
+- Costmap clearing before patrol replanning
+- Live autonomy health, patrol route, costmaps, and sensor status in RViz
 
 ## Current Status
 
@@ -45,18 +50,19 @@ energy-aware docking, and mission-level recovery with Nav2.
 | Rear RGB camera and ROS image bridge | Complete |
 | Dock-marker perception | Complete |
 | SLAM mapping and map export | Complete |
-| Nav2 localization and autonomous navigation | Initial implementation |
-| Multi-waypoint patrol | Initial implementation |
+| Nav2 localization and autonomous navigation | Robust simulation implementation |
+| Multi-waypoint patrol | Validated in simulation |
 | Return to home | Initial implementation |
 | Docking station and docking poses | Complete |
 | Camera-guided precision auto-docking | Complete in simulation |
-| Marker-loss safety and recovery | Initial implementation |
-| Automatic undocking | Initial implementation |
-| Battery and charging simulation | Initial implementation |
-| Low-battery docking trigger | Initial implementation |
-| Energy-aware patrol pause and resume | Initial implementation |
-| Dynamic obstacle avoidance | Initial implementation |
-| Mission state and autonomous recovery | Initial implementation |
+| Marker-loss safety and recovery | Validated in simulation |
+| Automatic undocking | Validated in simulation |
+| Battery and charging simulation | Validated in simulation |
+| Low-battery docking trigger | Validated in simulation |
+| Energy-aware patrol pause and resume | Validated in simulation |
+| Dynamic obstacle avoidance | Validated in simulation |
+| Mission state and autonomous recovery | Validated in simulation |
+| Autonomy diagnostics and RViz health overlay | Complete |
 | Physical robot deployment | Planned |
 
 ## Project Structure
@@ -65,7 +71,7 @@ energy-aware docking, and mission-level recovery with Nav2.
 .
 |-- src/
 |   |-- companion_robot_behaviors/
-|   |   |-- config/        # Patrol, docking, battery, and mission parameters
+|   |   |-- config/        # Patrol, docking, battery, mission, and diagnostics
 |   |   |-- launch/        # Autonomous behavior launch files
 |   |   `-- scripts/       # Patrol, docking, battery, and mission nodes
 |   |-- companion_robot_description/
@@ -84,7 +90,8 @@ energy-aware docking, and mission-level recovery with Nav2.
 |   |   `-- scripts/       # Rear-camera marker detection node
 |   `-- companion_robot_navigation/
 |       |-- config/        # AMCL, costmap, planner, and controller parameters
-|       `-- launch/        # Autonomous-navigation launch file
+|       |-- launch/        # Autonomous-navigation launch file
+|       `-- rviz/          # Navigation, health, route, and costmap view
 |-- .gitignore
 |-- LICENSE
 `-- README.md
@@ -398,12 +405,26 @@ and then retries the saved waypoint before continuing its patrol. The launch
 repeats patrol loops indefinitely by default; pass `loop_count:=N` to use a
 finite number of loops.
 
+The supplied navigation RViz view now shows the saved map, local/global
+costmaps, AMCL particles, LiDAR, planned path, patrol route, and a coloured
+health indicator above the robot. Green means healthy, yellow means attention
+or recovery, and red means a terminal error. The dock camera debug display is
+included but disabled by default; enable **Dock Camera Debug** only when the
+rear image needs inspection.
+
 Mission state transitions are published on `/mission_status`. A compact status
 snapshot, including subsystem states and recovery counters, is available from
 a second sourced terminal:
 
 ```bash
 ros2 service call /get_mission_status std_srvs/srv/Trigger "{}"
+```
+
+For a health-focused snapshot covering mission state, battery, odometry,
+LiDAR, AMCL uncertainty, navigation, and docking, call:
+
+```bash
+ros2 service call /get_autonomy_health std_srvs/srv/Trigger "{}"
 ```
 
 Expected states include `INITIALIZING`, `IDLE`, `PATROLLING`,
@@ -414,6 +435,12 @@ failures and failed low-battery docking cycles are retried up to the configured
 limits in `src/companion_robot_behaviors/config/mission.yaml`.
 The status snapshot also contains `dock_marker_status`, so camera perception can
 be checked without opening a separate image window.
+
+When AMCL becomes stale or excessively uncertain, recovery happens in two
+steps. The mission manager first requests a no-motion laser update. If that is
+not enough, it requests global relocalization and replans the current patrol
+goal. A failed Nav2 goal also clears both costmaps before retrying, preventing a
+short-lived moving obstacle from poisoning every later plan.
 
 After inspecting and clearing the physical cause of a terminal `ERROR`, reset
 the recovery counters and request another attempt with:
@@ -475,6 +502,7 @@ whole session.
 | `/undock_robot` | `std_srvs/srv/Trigger` | Leave the dock for the staging pose |
 | `/simulate_low_battery` | `std_srvs/srv/Trigger` | Trigger a low-battery demonstration |
 | `/get_mission_status` | `std_srvs/srv/Trigger` | Return one mission and subsystem snapshot |
+| `/get_autonomy_health` | `std_srvs/srv/Trigger` | Return combined mission, sensor, and localization health |
 | `/recover_mission` | `std_srvs/srv/Trigger` | Reset recovery limits and retry the failed mission |
 | `/recover_patrol` | `std_srvs/srv/Trigger` | Cancel and replan the current patrol goal |
 | `/set_moving_obstacle_enabled` | `std_srvs/srv/SetBool` | Pause or resume the moving obstacle |
@@ -485,21 +513,25 @@ whole session.
 | `/dock_marker/status` | `std_msgs/msg/String` | Camera and marker detection state |
 | `/dock_marker/debug_image` | `sensor_msgs/msg/Image` | Annotated image for RViz diagnostics |
 | `/patrol_status` | `std_msgs/msg/String` | Latest waypoint-patrol state |
+| `/patrol/visualization` | `visualization_msgs/msg/MarkerArray` | Waypoints, route, active target, and home marker for RViz |
 | `/mission_status` | `std_msgs/msg/String` | Latest high-level mission state |
 | `/mission_detail` | `std_msgs/msg/String` | Human-readable explanation of the mission state |
+| `/autonomy/health` | `std_msgs/msg/String` | Combined `OK`, `WARN`, `ERROR`, or `STALE` health state |
+| `/autonomy/visualization` | `visualization_msgs/msg/MarkerArray` | Coloured status indicator and mission text in RViz |
+| `/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Detailed subsystem health for ROS diagnostic tools |
 | `/battery_state` | `sensor_msgs/msg/BatteryState` | Simulated charge and power status |
 
-The `/odom` topic currently comes from Gazebo's pose-based odometry publisher.
-It provides a stable reference for learning SLAM. The separate `/wheel_odom`
-topic remains available for later wheel-slip and encoder-odometry experiments.
+The `/odom` topic comes from Gazebo's pose-based odometry publisher with modest
+Gaussian measurement noise. This keeps the simulation approachable while
+requiring AMCL to perform real corrections. The separate `/wheel_odom` topic
+remains available for later wheel-slip and encoder-odometry experiments.
 
 ## Roadmap
 
-- Improve AMCL robustness with noisier odometry
-- Tune costmaps and the local controller for tighter spaces
-- Add mission-state visualization and diagnostics in RViz
-- Test visual docking under stronger camera noise and partial occlusion
 - Add person detection and human-following companion behaviour
+- Add person identity selection and lost-person recovery
+- Validate camera-guided docking under changing light and stronger occlusion
+- Replace pose odometry with fused wheel encoder and IMU odometry
 - Transfer the software stack to physical hardware
 
 ## License

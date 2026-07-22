@@ -7,14 +7,14 @@ import math
 import time
 
 import rclpy
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import String
-from std_srvs.srv import Trigger
+from std_srvs.srv import Empty, Trigger
 
 
 def clamp(value, lower, upper):
@@ -55,6 +55,13 @@ class MissionManager(Node):
         self.declare_parameter("recovery_retry_delay", 3.0)
         self.declare_parameter("max_patrol_recovery_attempts", 3)
         self.declare_parameter("max_docking_recovery_attempts", 3)
+        self.declare_parameter("localization_startup_grace", 20.0)
+        self.declare_parameter("localization_timeout", 15.0)
+        self.declare_parameter("localization_position_std_limit", 0.80)
+        self.declare_parameter("localization_yaw_std_limit", 1.20)
+        self.declare_parameter("localization_recovery_cooldown", 10.0)
+        self.declare_parameter("max_localization_recovery_attempts", 2)
+        self.declare_parameter("localization_stable_reset_seconds", 8.0)
         self.declare_parameter("stuck_timeout", 15.0)
         self.declare_parameter("command_timeout", 1.0)
         self.declare_parameter("linear_command_threshold", 0.03)
@@ -90,6 +97,43 @@ class MissionManager(Node):
             1,
             int(
                 self.get_parameter("max_docking_recovery_attempts").value
+            ),
+        )
+        self.localization_startup_grace = max(
+            3.0,
+            float(self.get_parameter("localization_startup_grace").value),
+        )
+        self.localization_timeout = max(
+            3.0, float(self.get_parameter("localization_timeout").value)
+        )
+        self.localization_position_std_limit = max(
+            0.10,
+            float(
+                self.get_parameter("localization_position_std_limit").value
+            ),
+        )
+        self.localization_yaw_std_limit = max(
+            0.10,
+            float(self.get_parameter("localization_yaw_std_limit").value),
+        )
+        self.localization_recovery_cooldown = max(
+            2.0,
+            float(
+                self.get_parameter("localization_recovery_cooldown").value
+            ),
+        )
+        self.max_localization_recovery_attempts = max(
+            1,
+            int(
+                self.get_parameter(
+                    "max_localization_recovery_attempts"
+                ).value
+            ),
+        )
+        self.localization_stable_reset_seconds = max(
+            2.0,
+            float(
+                self.get_parameter("localization_stable_reset_seconds").value
             ),
         )
         self.stuck_timeout = max(
@@ -158,11 +202,23 @@ class MissionManager(Node):
         self.command_subscription = self.create_subscription(
             Twist, "/cmd_vel_nav", self._command_callback, 20
         )
+        self.amcl_subscription = self.create_subscription(
+            PoseWithCovarianceStamped,
+            "/amcl_pose",
+            self._amcl_callback,
+            10,
+        )
 
         self.dock_client = self.create_client(Trigger, "/dock_robot")
         self.undock_client = self.create_client(Trigger, "/undock_robot")
         self.patrol_recovery_client = self.create_client(
             Trigger, "/recover_patrol"
+        )
+        self.nomotion_update_client = self.create_client(
+            Empty, "/request_nomotion_update"
+        )
+        self.global_localization_client = self.create_client(
+            Empty, "/reinitialize_global_localization"
         )
         self.status_service = self.create_service(
             Trigger, "/get_mission_status", self._handle_status_request
@@ -188,10 +244,19 @@ class MissionManager(Node):
         self.next_undock_attempt_at = 0.0
         self.next_patrol_recovery_at = 0.0
         self.force_recovery_requested = False
+        self.started_at = time.monotonic()
         self.last_command_at = None
         self.navigation_command_active = False
         self.last_progress_pose = None
         self.last_progress_at = time.monotonic()
+        self.last_amcl_at = None
+        self.localization_position_std = None
+        self.localization_yaw_std = None
+        self.localization_healthy_since = None
+        self.localization_recovery_attempts = 0
+        self.localization_recovery_future = None
+        self.localization_recovery_was_global = False
+        self.next_localization_recovery_at = 0.0
 
         self._set_state(
             "INITIALIZING", "Waiting for patrol, battery, and docking status."
@@ -284,6 +349,24 @@ class MissionManager(Node):
         if not self.navigation_command_active:
             self.last_progress_at = self.last_command_at
 
+    def _amcl_callback(self, localization):
+        covariance = localization.pose.covariance
+        self.localization_position_std = math.sqrt(
+            max(0.0, covariance[0], covariance[7])
+        )
+        self.localization_yaw_std = math.sqrt(max(0.0, covariance[35]))
+        self.last_amcl_at = time.monotonic()
+        if (
+            self.localization_position_std
+            < self.localization_position_std_limit * 0.70
+            and self.localization_yaw_std
+            < self.localization_yaw_std_limit * 0.70
+        ):
+            if self.localization_healthy_since is None:
+                self.localization_healthy_since = self.last_amcl_at
+        else:
+            self.localization_healthy_since = None
+
     def _tick(self):
         now = time.monotonic()
         if (
@@ -360,6 +443,17 @@ class MissionManager(Node):
                 self._request_docking()
             return
 
+        localization_issue = self._localization_issue(now)
+        if localization_issue is not None:
+            self._recover_localization(now, localization_issue)
+            return
+        if (
+            self.localization_healthy_since is not None
+            and now - self.localization_healthy_since
+            >= self.localization_stable_reset_seconds
+        ):
+            self.localization_recovery_attempts = 0
+
         if self.force_recovery_requested:
             self.force_recovery_requested = False
             self._request_patrol_recovery("Manual mission recovery requested.")
@@ -416,6 +510,107 @@ class MissionManager(Node):
         ):
             return False
         return now - self.last_progress_at >= self.stuck_timeout
+
+    def _localization_issue(self, now):
+        if (
+            self.patrol_status not in {"PATROLLING", "RETURNING_HOME"}
+            or self.docking_status != "IDLE"
+            or now - self.started_at < self.localization_startup_grace
+        ):
+            return None
+        if self.last_amcl_at is None:
+            return "AMCL has not published a localization estimate."
+        age = now - self.last_amcl_at
+        if age >= self.localization_timeout:
+            return f"AMCL estimate is stale by {age:.1f} seconds."
+        if (
+            self.localization_position_std is not None
+            and self.localization_position_std
+            >= self.localization_position_std_limit
+        ):
+            return (
+                "AMCL position uncertainty is "
+                f"{self.localization_position_std:.2f} m."
+            )
+        if (
+            self.localization_yaw_std is not None
+            and self.localization_yaw_std >= self.localization_yaw_std_limit
+        ):
+            return (
+                "AMCL yaw uncertainty is "
+                f"{self.localization_yaw_std:.2f} rad."
+            )
+        return None
+
+    def _recover_localization(self, now, reason):
+        self.localization_healthy_since = None
+        if self.localization_recovery_future is not None:
+            self._set_state("RECOVERY", "Waiting for AMCL recovery response.")
+            return
+        if now < self.next_localization_recovery_at:
+            self._set_state("RECOVERY", reason + " Waiting before retry.")
+            return
+        if (
+            self.localization_recovery_attempts
+            >= self.max_localization_recovery_attempts
+        ):
+            self._set_state(
+                "ERROR",
+                reason + " Localization recovery attempts were exhausted.",
+            )
+            return
+
+        use_global = self.localization_recovery_attempts > 0
+        client = (
+            self.global_localization_client
+            if use_global
+            else self.nomotion_update_client
+        )
+        action = (
+            "global AMCL relocalization"
+            if use_global
+            else "AMCL no-motion sensor update"
+        )
+        if not client.service_is_ready():
+            self._set_state("RECOVERY", f"Waiting for {action} service.")
+            return
+
+        self.localization_recovery_attempts += 1
+        self.localization_recovery_was_global = use_global
+        self.next_localization_recovery_at = (
+            now + self.localization_recovery_cooldown
+        )
+        self._set_state(
+            "RECOVERY",
+            f"{reason} Requesting {action} "
+            f"({self.localization_recovery_attempts}/"
+            f"{self.max_localization_recovery_attempts}).",
+        )
+        self.localization_recovery_future = client.call_async(Empty.Request())
+        self.localization_recovery_future.add_done_callback(
+            self._localization_recovery_response
+        )
+
+    def _localization_recovery_response(self, future):
+        self.localization_recovery_future = None
+        try:
+            future.result()
+        except Exception as error:
+            self.get_logger().error(
+                f"Localization recovery service call failed: {error}"
+            )
+            return
+        if self.localization_recovery_was_global:
+            self.get_logger().warning(
+                "Global AMCL relocalization requested; replanning patrol."
+            )
+            self._request_patrol_recovery(
+                "Localization was globally reinitialized."
+            )
+        else:
+            self.get_logger().warning(
+                "AMCL no-motion update requested to reduce uncertainty."
+            )
 
     def _request_docking(self):
         if self.dock_future is not None:
@@ -547,6 +742,11 @@ class MissionManager(Node):
             "dock_marker_status": self.marker_status,
             "patrol_recovery_attempts": self.patrol_recovery_attempts,
             "docking_recovery_attempts": self.docking_recovery_attempts,
+            "localization_position_std": self.localization_position_std,
+            "localization_yaw_std": self.localization_yaw_std,
+            "localization_recovery_attempts": (
+                self.localization_recovery_attempts
+            ),
         }
         response.success = self.state != "ERROR"
         response.message = json.dumps(summary, separators=(",", ":"))
@@ -567,8 +767,10 @@ class MissionManager(Node):
 
         self.patrol_recovery_attempts = 0
         self.docking_recovery_attempts = 0
+        self.localization_recovery_attempts = 0
         self.next_dock_attempt_at = 0.0
         self.next_patrol_recovery_at = 0.0
+        self.next_localization_recovery_at = 0.0
         if self.docking_status == "ERROR":
             self.dock_cycle_active = True
         else:

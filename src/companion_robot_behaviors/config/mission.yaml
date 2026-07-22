@@ -9,6 +9,16 @@ mission_manager:
     max_patrol_recovery_attempts: 3
     max_docking_recovery_attempts: 3
 
+    # AMCL first receives a no-motion sensor refresh. If uncertainty remains
+    # excessive, the manager performs global relocalization and replans.
+    localization_startup_grace: 20.0
+    localization_timeout: 15.0
+    localization_position_std_limit: 0.80
+    localization_yaw_std_limit: 1.20
+    localization_recovery_cooldown: 10.0
+    max_localization_recovery_attempts: 2
+    localization_stable_reset_seconds: 8.0
+
     # Replan when Nav2 keeps requesting motion but odometry does not change.
     stuck_timeout: 15.0
     command_timeout: 1.0

@@ -16,6 +16,7 @@ def generate_launch_description():
     battery_params = LaunchConfiguration("battery_params")
     marker_params = LaunchConfiguration("marker_params")
     mission_params = LaunchConfiguration("mission_params")
+    diagnostics_params = LaunchConfiguration("diagnostics_params")
 
     behaviors_share = FindPackageShare("companion_robot_behaviors")
     default_patrol_params = PathJoinSubstitution(
@@ -29,6 +30,9 @@ def generate_launch_description():
     )
     default_mission_params = PathJoinSubstitution(
         [behaviors_share, "config", "mission.yaml"]
+    )
+    default_diagnostics_params = PathJoinSubstitution(
+        [behaviors_share, "config", "diagnostics.yaml"]
     )
     perception_share = FindPackageShare("companion_robot_perception")
     default_marker_params = PathJoinSubstitution(
@@ -74,6 +78,14 @@ def generate_launch_description():
         parameters=[mission_params, {"use_sim_time": True}],
     )
 
+    autonomy_diagnostics = Node(
+        package="companion_robot_behaviors",
+        executable="autonomy_diagnostics",
+        name="autonomy_diagnostics",
+        output="screen",
+        parameters=[diagnostics_params, {"use_sim_time": True}],
+    )
+
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -116,8 +128,14 @@ def generate_launch_description():
                 default_value=default_marker_params,
                 description="Path to the dock-marker detector parameters.",
             ),
+            DeclareLaunchArgument(
+                "diagnostics_params",
+                default_value=default_diagnostics_params,
+                description="Path to the autonomy-diagnostics parameters.",
+            ),
             docking_stack,
             patrol,
             mission_manager,
+            autonomy_diagnostics,
         ]
     )

@@ -6,13 +6,16 @@ import math
 
 import rclpy
 from action_msgs.msg import GoalStatus
+from geometry_msgs.msg import Point
 from nav2_msgs.action import NavigateToPose
+from nav2_msgs.srv import ClearEntireCostmap
 from rclpy.action import ActionClient
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 class WaypointPatrol(Node):
@@ -26,6 +29,7 @@ class WaypointPatrol(Node):
         self.declare_parameter("max_goal_retries", 5)
         self.declare_parameter("home_pose", [0.0, 0.0, 0.0])
         self.declare_parameter("energy_resume_delay", 1.0)
+        self.declare_parameter("nav2_activation_delay", 1.5)
 
         flat_waypoints = [
             float(value) for value in self.get_parameter("waypoints").value
@@ -50,6 +54,9 @@ class WaypointPatrol(Node):
         self.energy_resume_delay = max(
             0.1, float(self.get_parameter("energy_resume_delay").value)
         )
+        self.nav2_activation_delay = max(
+            0.0, float(self.get_parameter("nav2_activation_delay").value)
+        )
         home_pose = [
             float(value) for value in self.get_parameter("home_pose").value
         ]
@@ -66,11 +73,22 @@ class WaypointPatrol(Node):
         self.recover_service = self.create_service(
             Trigger, "/recover_patrol", self._handle_recover
         )
+        self.local_costmap_client = self.create_client(
+            ClearEntireCostmap,
+            "/local_costmap/clear_entirely_local_costmap",
+        )
+        self.global_costmap_client = self.create_client(
+            ClearEntireCostmap,
+            "/global_costmap/clear_entirely_global_costmap",
+        )
         status_qos = QoSProfile(depth=1)
         status_qos.reliability = ReliabilityPolicy.RELIABLE
         status_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
         self.status_publisher = self.create_publisher(
             String, "/patrol_status", status_qos
+        )
+        self.route_publisher = self.create_publisher(
+            MarkerArray, "/patrol/visualization", status_qos
         )
         self.docking_status_subscription = self.create_subscription(
             String,
@@ -95,11 +113,13 @@ class WaypointPatrol(Node):
         self.recovery_goal_handle = None
         self._scheduled_timer = None
         self._last_feedback_log_ns = 0
+        self.costmap_clear_futures = []
 
         self.get_logger().info(
             f"Patrol loaded {len(self.waypoints)} waypoints; waiting for Nav2."
         )
         self._set_status("WAITING_FOR_NAV2")
+        self._publish_route_markers()
         self._server_timer = self.create_timer(1.0, self._wait_for_server)
 
     def _set_status(self, status):
@@ -110,6 +130,89 @@ class WaypointPatrol(Node):
         message.data = status
         self.status_publisher.publish(message)
         self.get_logger().info(f"Patrol status: {status}")
+        if hasattr(self, "route_publisher"):
+            self._publish_route_markers()
+
+    def _publish_route_markers(self):
+        markers = []
+        clear = Marker()
+        clear.action = Marker.DELETEALL
+        markers.append(clear)
+
+        route = Marker()
+        route.header.frame_id = "map"
+        route.header.stamp = self.get_clock().now().to_msg()
+        route.ns = "patrol_route"
+        route.id = 0
+        route.type = Marker.LINE_STRIP
+        route.action = Marker.ADD
+        route.pose.orientation.w = 1.0
+        route.scale.x = 0.025
+        route.color.r = 0.05
+        route.color.g = 0.75
+        route.color.b = 1.0
+        route.color.a = 0.80
+        for x, y, _yaw in self.waypoints:
+            point = Point()
+            point.x = x
+            point.y = y
+            point.z = 0.03
+            route.points.append(point)
+        if self.waypoints:
+            closing_point = Point()
+            closing_point.x = self.waypoints[0][0]
+            closing_point.y = self.waypoints[0][1]
+            closing_point.z = 0.03
+            route.points.append(closing_point)
+        markers.append(route)
+
+        for index, (x, y, yaw) in enumerate(self.waypoints):
+            waypoint = Marker()
+            waypoint.header.frame_id = "map"
+            waypoint.header.stamp = route.header.stamp
+            waypoint.ns = "patrol_waypoints"
+            waypoint.id = index
+            waypoint.type = Marker.ARROW
+            waypoint.action = Marker.ADD
+            waypoint.pose.position.x = x
+            waypoint.pose.position.y = y
+            waypoint.pose.position.z = 0.05
+            waypoint.pose.orientation.z = math.sin(yaw / 2.0)
+            waypoint.pose.orientation.w = math.cos(yaw / 2.0)
+            waypoint.scale.x = 0.28
+            waypoint.scale.y = 0.07
+            waypoint.scale.z = 0.07
+            if index == self.current_waypoint and not self.finished:
+                waypoint.color.r = 1.0
+                waypoint.color.g = 0.45
+                waypoint.color.b = 0.05
+            else:
+                waypoint.color.r = 0.05
+                waypoint.color.g = 0.75
+                waypoint.color.b = 1.0
+            waypoint.color.a = 0.95
+            markers.append(waypoint)
+
+        home = Marker()
+        home.header.frame_id = "map"
+        home.header.stamp = route.header.stamp
+        home.ns = "patrol_home"
+        home.id = 0
+        home.type = Marker.CUBE
+        home.action = Marker.ADD
+        home.pose.position.x = self.home_pose[0]
+        home.pose.position.y = self.home_pose[1]
+        home.pose.position.z = 0.05
+        home.pose.orientation.w = 1.0
+        home.scale.x = 0.14
+        home.scale.y = 0.14
+        home.scale.z = 0.10
+        home.color.r = 0.10
+        home.color.g = 0.95
+        home.color.b = 0.35
+        home.color.a = 0.95
+        markers.append(home)
+        self.route_publisher.publish(MarkerArray(markers=markers))
 
     def _wait_for_server(self):
         if not self.action_client.server_is_ready():
@@ -119,10 +222,15 @@ class WaypointPatrol(Node):
         self._server_timer.cancel()
         self.destroy_timer(self._server_timer)
         self._server_timer = None
-        if self.return_state is not None:
-            self._send_home_goal()
-        else:
-            self._send_current_waypoint()
+        self.get_logger().info(
+            "Nav2 action server found; allowing lifecycle activation to settle."
+        )
+        callback = (
+            self._send_home_goal
+            if self.return_state is not None
+            else self._send_current_waypoint
+        )
+        self._schedule(callback, self.nav2_activation_delay)
 
     def _schedule(self, callback, delay_seconds):
         if self.finished:
@@ -276,6 +384,7 @@ class WaypointPatrol(Node):
             f"Waypoint {self.current_waypoint + 1} reached."
         )
         self.current_waypoint += 1
+        self._publish_route_markers()
 
         if self.current_waypoint < len(self.waypoints):
             self._schedule(self._send_current_waypoint, self.pause_seconds)
@@ -283,6 +392,7 @@ class WaypointPatrol(Node):
 
         self.completed_loops += 1
         self.current_waypoint = 0
+        self._publish_route_markers()
         if self.loop_count == 0 or self.completed_loops < self.loop_count:
             self.get_logger().info(
                 f"Patrol loop {self.completed_loops} complete; starting next loop."
@@ -349,6 +459,7 @@ class WaypointPatrol(Node):
         self.retry_count = 0
         self._cancel_scheduled_timer()
         self._set_status("RECOVERY")
+        self._clear_costmaps("manual patrol recovery")
 
         if self.active_goal_handle is not None:
             if self.return_state == "navigating":
@@ -478,11 +589,50 @@ class WaypointPatrol(Node):
             return
 
         self._set_status("RECOVERY")
+        self._clear_costmaps(f"{label.lower()} retry")
         self.get_logger().warning(
             f"{reason}; retry {self.retry_count}/{self.max_goal_retries} "
             f"in {self.retry_delay:.1f} s."
         )
         self._schedule(retry_callback, self.retry_delay)
+
+    def _clear_costmaps(self, reason):
+        requested = False
+        clients = (
+            ("local", self.local_costmap_client),
+            ("global", self.global_costmap_client),
+        )
+        for name, client in clients:
+            if not client.service_is_ready():
+                self.get_logger().warning(
+                    f"{name.capitalize()} costmap clearing service is not ready."
+                )
+                continue
+            future = client.call_async(ClearEntireCostmap.Request())
+            self.costmap_clear_futures.append(future)
+            future.add_done_callback(
+                lambda done, costmap=name: self._costmap_clear_response(
+                    done, costmap
+                )
+            )
+            requested = True
+        if requested:
+            self.get_logger().warning(
+                f"Clearing Nav2 costmaps before {reason}."
+            )
+
+    def _costmap_clear_response(self, future, costmap):
+        if future in self.costmap_clear_futures:
+            self.costmap_clear_futures.remove(future)
+        try:
+            future.result()
+            self.get_logger().info(
+                f"{costmap.capitalize()} costmap cleared successfully."
+            )
+        except Exception as error:
+            self.get_logger().error(
+                f"Failed to clear the {costmap} costmap: {error}"
+            )
 
 
 def main(args=None):

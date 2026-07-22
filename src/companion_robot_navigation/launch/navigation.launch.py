@@ -19,7 +19,6 @@ def generate_launch_description():
 
     gazebo_share = FindPackageShare("companion_robot_gazebo")
     navigation_share = FindPackageShare("companion_robot_navigation")
-    nav2_bringup_share = FindPackageShare("nav2_bringup")
 
     default_map = PathJoinSubstitution(
         [gazebo_share, "maps", "companion_arena.yaml"]
@@ -28,7 +27,7 @@ def generate_launch_description():
         [navigation_share, "config", "nav2_params.yaml"]
     )
     rviz_config = PathJoinSubstitution(
-        [nav2_bringup_share, "rviz", "nav2_default_view.rviz"]
+        [navigation_share, "rviz", "companion_navigation.rviz"]
     )
 
     simulation = IncludeLaunchDescription(
@@ -86,7 +85,19 @@ def generate_launch_description():
         name="controller_server",
         output="screen",
         parameters=common_parameters,
-        remappings=[("cmd_vel", "/cmd_vel_nav")],
+        remappings=[("cmd_vel", "/cmd_vel_nav_raw")],
+    )
+
+    velocity_smoother = Node(
+        package="nav2_velocity_smoother",
+        executable="velocity_smoother",
+        name="velocity_smoother",
+        output="screen",
+        parameters=common_parameters,
+        remappings=[
+            ("cmd_vel", "/cmd_vel_nav_raw"),
+            ("cmd_vel_smoothed", "/cmd_vel_nav"),
+        ],
     )
 
     planner_server = Node(
@@ -133,6 +144,7 @@ def generate_launch_description():
                 "autostart": autostart_value,
                 "node_names": [
                     "controller_server",
+                    "velocity_smoother",
                     "planner_server",
                     "behavior_server",
                     "bt_navigator",
@@ -161,6 +173,7 @@ def generate_launch_description():
         period=5.0,
         actions=[
             controller_server,
+            velocity_smoother,
             planner_server,
             behavior_server,
             bt_navigator,

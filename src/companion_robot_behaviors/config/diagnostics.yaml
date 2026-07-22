@@ -1,0 +1,16 @@
+autonomy_diagnostics:
+  ros__parameters:
+    publish_frequency: 2.0
+    startup_grace_seconds: 15.0
+    sensor_warning_timeout: 1.5
+    sensor_error_timeout: 4.0
+    localization_warning_timeout: 6.0
+    localization_error_timeout: 15.0
+    localization_position_std_warn: 0.40
+    localization_position_std_error: 0.80
+    localization_yaw_std_warn: 0.60
+    localization_yaw_std_error: 1.20
+    low_battery_threshold: 0.25
+    critical_battery_threshold: 0.12
+    marker_frame: base_footprint
+
