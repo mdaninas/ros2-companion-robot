@@ -5,12 +5,25 @@ person_detector:
     output_frame: base_footprint
     horizontal_fov: 1.3962634
 
-    # The simulated target wears purple. Detection still operates on the
-    # rendered camera image; these values are OpenCV HSV ranges.
-    hsv_lower: [120, 70, 45]
-    hsv_upper: [170, 255, 255]
+    # Identities come from clothing colours in the rendered camera image.
+    # No Gazebo ground-truth pose or model name is passed to this detector.
+    identity_names: [person_alpha, person_beta]
+    identity_hsv_lower: [
+      120, 70, 45,   # purple person_alpha
+      95, 100, 45    # blue person_beta
+    ]
+    identity_hsv_upper: [
+      170, 255, 255,
+      119, 255, 255
+    ]
+    identity_marker_rgb: [
+      0.72, 0.10, 0.96,
+      0.05, 0.35, 1.00
+    ]
+    selected_identity: person_alpha
     minimum_blob_area: 120.0
     minimum_blob_height: 12
+    minimum_blob_aspect_ratio: 0.65
     morphology_kernel: 5
 
     scan_timeout: 0.75
@@ -32,4 +45,6 @@ person_detector:
     # before they can become a false person range after a brief occlusion.
     maximum_tracking_range: 2.0
     filter_alpha: 0.35
-    debug_image_enabled: true
+    # Keep the annotated image opt-in; copying it every frame is expensive in
+    # WSL and RViz already shows lightweight identity markers by default.
+    debug_image_enabled: false

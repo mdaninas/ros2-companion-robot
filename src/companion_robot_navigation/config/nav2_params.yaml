@@ -1,28 +1,31 @@
 amcl:
   ros__parameters:
-    # Motion-model uncertainty is intentionally higher than the old
-    # ground-truth setup so AMCL continues correcting noisy odometry.
-    alpha1: 0.12
-    alpha2: 0.10
-    alpha3: 0.08
-    alpha4: 0.10
-    alpha5: 0.05
+    # Simulation odometry already has bounded 3 mm noise. Large motion-model
+    # noise allowed moving people to pull AMCL away from the static map.
+    alpha1: 0.04
+    alpha2: 0.04
+    alpha3: 0.03
+    alpha4: 0.04
+    alpha5: 0.02
     base_frame_id: base_footprint
     global_frame_id: map
     odom_frame_id: odom
     scan_topic: scan
     robot_model_type: nav2_amcl::DifferentialMotionModel
-    laser_model_type: likelihood_field
-    laser_min_range: 0.12
+    # The probabilistic likelihood-field model activates beam skipping, so
+    # people walking through the arena do not drag the static-map estimate.
+    laser_model_type: likelihood_field_prob
+    # Defensively ignore near-body returns even if sensor geometry regresses.
+    laser_min_range: 0.25
     laser_max_range: 8.0
     laser_likelihood_max_dist: 2.0
-    max_beams: 180
-    min_particles: 500
-    max_particles: 2500
+    max_beams: 120
+    min_particles: 400
+    max_particles: 1600
     pf_err: 0.03
     pf_z: 0.99
     do_beamskip: true
-    beam_skip_distance: 0.45
+    beam_skip_distance: 0.30
     beam_skip_threshold: 0.30
     beam_skip_error_threshold: 0.90
     update_min_d: 0.03
@@ -32,7 +35,7 @@ amcl:
     tf_broadcast: true
     save_pose_rate: 0.5
     set_initial_pose: true
-    always_reset_initial_pose: false
+    always_reset_initial_pose: true
     initial_pose:
       x: 0.0
       y: 0.0
@@ -40,12 +43,12 @@ amcl:
       yaw: 0.0
     recovery_alpha_fast: 0.10
     recovery_alpha_slow: 0.001
-    sigma_hit: 0.18
+    sigma_hit: 0.20
     lambda_short: 0.1
-    z_hit: 0.70
+    z_hit: 0.65
     z_short: 0.025
     z_max: 0.025
-    z_rand: 0.25
+    z_rand: 0.30
 
 map_server:
   ros__parameters:
@@ -149,8 +152,10 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 10.0
-      publish_frequency: 10.0
+      # Five updates per simulated second are sufficient at 0.20 m/s and
+      # avoid saturating WSL/RViz with redundant full costmaps.
+      update_frequency: 5.0
+      publish_frequency: 3.0
       global_frame: odom
       robot_base_frame: base_footprint
       rolling_window: true
@@ -171,14 +176,14 @@ local_costmap:
           data_type: LaserScan
           clearing: true
           marking: true
-          # Retain moving returns briefly so the planner does not oscillate
-          # when an obstacle falls between adjacent LiDAR beams.
-          observation_persistence: 0.35
-          expected_update_rate: 0.20
+          # Keep moving returns only long enough to bridge one scan. Longer
+          # persistence produced visible trails behind walking people.
+          observation_persistence: 0.15
+          expected_update_rate: 0.30
           max_obstacle_height: 2.0
-          raytrace_min_range: 0.12
+          raytrace_min_range: 0.25
           raytrace_max_range: 8.0
-          obstacle_min_range: 0.12
+          obstacle_min_range: 0.25
           obstacle_max_range: 7.5
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
@@ -189,8 +194,8 @@ local_costmap:
 global_costmap:
   global_costmap:
     ros__parameters:
-      update_frequency: 5.0
-      publish_frequency: 2.0
+      update_frequency: 2.0
+      publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_footprint
       resolution: 0.05
@@ -211,12 +216,12 @@ global_costmap:
           data_type: LaserScan
           clearing: true
           marking: true
-          observation_persistence: 0.50
-          expected_update_rate: 0.20
+          observation_persistence: 0.20
+          expected_update_rate: 0.30
           max_obstacle_height: 2.0
-          raytrace_min_range: 0.12
+          raytrace_min_range: 0.25
           raytrace_max_range: 8.0
-          obstacle_min_range: 0.12
+          obstacle_min_range: 0.25
           obstacle_max_range: 7.5
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer

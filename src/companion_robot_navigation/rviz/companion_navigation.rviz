@@ -245,6 +245,18 @@ Visualization Manager:
         Durability Policy: Transient Local
         History Policy: Keep Last
         Reliability Policy: Reliable
+        Value: /person_detection/tracks_visualization
+      Name: Person Identity Tracks
+      Namespaces:
+        {}
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Marker Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
         Value: /human_following/visualization
       Name: Human Following
       Namespaces:

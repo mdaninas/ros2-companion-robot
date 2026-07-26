@@ -2,6 +2,7 @@ human_follower:
   ros__parameters:
     target_pose_topic: /person_detection/pose
     target_visible_topic: /person_detection/visible
+    target_identity_topic: /person_detection/selected_identity
     # Direct turns and retreat use an exclusive behavior channel. The command
     # mux selects it instead of Nav2 before smoothing and safety filtering.
     direct_command_topic: /cmd_vel_behavior_raw
@@ -33,10 +34,17 @@ human_follower:
     retreat_escape_duration: 1.00
     retreat_escape_angular_speed: 0.30
     target_timeout: 1.5
-    # If the person slips just beyond the fixed camera edge, keep turning
-    # briefly toward the last sighting instead of freezing in their path.
-    target_reacquire_timeout: 5.0
-    target_reacquire_angular_speed: 0.28
+    # When the selected identity disappears, face its last map position first,
+    # then scan both directions. After the bounded first search, pause safely
+    # and periodically make a complete sweep until that identity returns.
+    target_search_timeout: 15.0
+    search_last_seen_duration: 3.0
+    search_sweep_period: 2.5
+    search_angular_speed: 0.28
+    search_yaw_tolerance: 0.10
+    reacquire_pause_duration: 3.0
+    # At 0.28 rad/s this is long enough to turn through more than 360 degrees.
+    reacquire_sweep_duration: 24.0
     goal_update_interval: 1.0
     goal_update_distance: 0.20
     goal_update_yaw: 0.15

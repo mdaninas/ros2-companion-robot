@@ -49,6 +49,10 @@ class HumanFollower(Node):
             "target_visible_topic", "/person_detection/visible"
         )
         self.declare_parameter(
+            "target_identity_topic",
+            "/person_detection/selected_identity",
+        )
+        self.declare_parameter(
             "direct_command_topic", "/cmd_vel_behavior_raw"
         )
         self.declare_parameter(
@@ -75,8 +79,13 @@ class HumanFollower(Node):
         self.declare_parameter("retreat_escape_duration", 1.00)
         self.declare_parameter("retreat_escape_angular_speed", 0.30)
         self.declare_parameter("target_timeout", 1.5)
-        self.declare_parameter("target_reacquire_timeout", 5.0)
-        self.declare_parameter("target_reacquire_angular_speed", 0.28)
+        self.declare_parameter("target_search_timeout", 15.0)
+        self.declare_parameter("search_last_seen_duration", 3.0)
+        self.declare_parameter("search_sweep_period", 2.5)
+        self.declare_parameter("search_angular_speed", 0.28)
+        self.declare_parameter("search_yaw_tolerance", 0.10)
+        self.declare_parameter("reacquire_pause_duration", 3.0)
+        self.declare_parameter("reacquire_sweep_duration", 24.0)
         self.declare_parameter("goal_update_interval", 1.0)
         self.declare_parameter("goal_update_distance", 0.20)
         self.declare_parameter("goal_update_yaw", 0.15)
@@ -90,6 +99,9 @@ class HumanFollower(Node):
         )
         self.target_visible_topic = str(
             self.get_parameter("target_visible_topic").value
+        )
+        self.target_identity_topic = str(
+            self.get_parameter("target_identity_topic").value
         )
         self.direct_command_topic = str(
             self.get_parameter("direct_command_topic").value
@@ -165,20 +177,38 @@ class HumanFollower(Node):
         self.target_timeout = max(
             0.3, float(self.get_parameter("target_timeout").value)
         )
-        self.target_reacquire_timeout = max(
-            self.target_timeout,
-            float(
-                self.get_parameter("target_reacquire_timeout").value
-            ),
+        self.target_search_timeout = max(
+            2.0, float(self.get_parameter("target_search_timeout").value)
         )
-        self.target_reacquire_angular_speed = clamp(
+        self.search_last_seen_duration = clamp(
             float(
-                self.get_parameter(
-                    "target_reacquire_angular_speed"
-                ).value
+                self.get_parameter("search_last_seen_duration").value
             ),
+            0.5,
+            self.target_search_timeout,
+        )
+        self.search_sweep_period = max(
+            0.75, float(self.get_parameter("search_sweep_period").value)
+        )
+        self.search_angular_speed = clamp(
+            float(self.get_parameter("search_angular_speed").value),
             0.12,
             0.45,
+        )
+        self.search_yaw_tolerance = max(
+            0.04,
+            float(self.get_parameter("search_yaw_tolerance").value),
+        )
+        self.reacquire_pause_duration = max(
+            0.5,
+            float(self.get_parameter("reacquire_pause_duration").value),
+        )
+        minimum_full_sweep_duration = (
+            2.0 * math.pi / self.search_angular_speed + 1.0
+        )
+        self.reacquire_sweep_duration = max(
+            minimum_full_sweep_duration,
+            float(self.get_parameter("reacquire_sweep_duration").value),
         )
         self.goal_update_interval = max(
             0.3, float(self.get_parameter("goal_update_interval").value)
@@ -232,6 +262,12 @@ class HumanFollower(Node):
             self._target_visible_callback,
             10,
         )
+        self.target_identity_subscription = self.create_subscription(
+            String,
+            self.target_identity_topic,
+            self._target_identity_callback,
+            latched_qos,
+        )
         self.safety_status_subscription = self.create_subscription(
             String,
             self.safety_status_topic,
@@ -256,6 +292,7 @@ class HumanFollower(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.status = "UNKNOWN"
+        self.selected_identity = "unknown"
         self.target_visible = False
         self.last_target_pose = None
         self.last_target_at = None
@@ -277,6 +314,8 @@ class HumanFollower(Node):
         self.retreat_blocked_since = None
         self.retreat_escape_until = 0.0
         self.retreat_escape_direction = 1.0
+        self.search_started_at = None
+        self.search_phase = "NONE"
 
         self._publish_direct_control_active(False)
         self._set_status("SEARCHING" if self.enabled else "STOPPED")
@@ -304,12 +343,35 @@ class HumanFollower(Node):
             return
         self.last_target_pose = pose
         self.last_target_at = time.monotonic()
+        self.target_visible = True
         self.last_target_distance = math.hypot(
             pose.pose.position.x, pose.pose.position.y
         )
+        self.search_started_at = None
+        self.search_phase = "NONE"
 
     def _target_visible_callback(self, visible):
         self.target_visible = bool(visible.data)
+
+    def _target_identity_callback(self, identity):
+        requested = identity.data.strip()
+        if not requested or requested == self.selected_identity:
+            return
+        previous = self.selected_identity
+        self.selected_identity = requested
+        self.target_visible = False
+        self.last_target_pose = None
+        self.last_target_at = None
+        self.last_target_distance = None
+        self.last_target_bearing = None
+        self.last_target_map = None
+        self.search_started_at = None
+        self.search_phase = "NONE"
+        self._cancel_active_goal("person identity changed")
+        self._stop_direct_control()
+        self.get_logger().info(
+            f"Following target changed from {previous} to {requested}."
+        )
 
     def _safety_status_callback(self, status):
         self.safety_status = str(status.data)
@@ -322,6 +384,8 @@ class HumanFollower(Node):
         self.last_goal_mode = None
         self.goal_failures = 0
         self.next_navigation_attempt_at = 0.0
+        self.search_started_at = None
+        self.search_phase = "NONE"
         self._set_status("SEARCHING")
         response.success = True
         response.message = "Human following enabled; searching for a person."
@@ -335,6 +399,8 @@ class HumanFollower(Node):
         self._cancel_active_goal("following stopped")
         self.last_goal = None
         self.last_goal_mode = None
+        self.search_started_at = None
+        self.search_phase = "NONE"
         self._set_status("STOPPED")
         self._publish_visualization(None, None, None)
         response.success = True
@@ -351,6 +417,7 @@ class HumanFollower(Node):
         payload = {
             "state": self.status,
             "enabled": self.enabled,
+            "selected_identity": self.selected_identity,
             "target_visible": self.target_visible,
             "target_age": target_age,
             "target_distance": self.last_target_distance,
@@ -364,6 +431,13 @@ class HumanFollower(Node):
                 time.monotonic() < self.retreat_escape_until
             ),
             "navigation_failures": self.goal_failures,
+            "search_phase": self.search_phase,
+            "search_elapsed": (
+                None
+                if self.search_started_at is None
+                else max(0.0, now - self.search_started_at)
+            ),
+            "last_known_target_map": self.last_target_map,
         }
         response.success = self.status != "ERROR"
         response.message = json.dumps(payload, separators=(",", ":"))
@@ -391,28 +465,7 @@ class HumanFollower(Node):
             else now - self.last_target_at
         )
         if self.last_target_pose is None or target_age > self.target_timeout:
-            self.retreat_active = False
-            self._reset_retreat_recovery()
-            self._cancel_active_goal("person target lost")
-            self.last_goal = None
-            self.last_goal_mode = None
-            if (
-                self.last_target_at is not None
-                and target_age <= self.target_reacquire_timeout
-                and self.last_target_bearing is not None
-            ):
-                self._publish_reacquire_command(
-                    self.last_target_bearing
-                )
-                self._set_status("REACQUIRING_TARGET")
-            else:
-                self._stop_direct_control()
-                self._set_status(
-                    "SEARCHING"
-                    if self.last_target_at is None
-                    else "TARGET_LOST"
-                )
-            self._publish_visualization(None, None, None)
+            self._handle_target_loss(now)
             return
 
         local_x = float(self.last_target_pose.pose.position.x)
@@ -421,6 +474,8 @@ class HumanFollower(Node):
         target_bearing = math.atan2(local_y, local_x)
         self.last_target_distance = target_distance
         self.last_target_bearing = target_bearing
+        self.search_started_at = None
+        self.search_phase = "NONE"
 
         transform = self._lookup_robot_transform(now)
         if transform is None:
@@ -515,6 +570,132 @@ class HumanFollower(Node):
         self._update_navigation_goal(goal, "FOLLOW")
         self._set_status("FOLLOWING")
 
+    def _handle_target_loss(self, now):
+        self.target_visible = False
+        self.retreat_active = False
+        self._reset_retreat_recovery()
+        self._cancel_active_goal("selected person target lost")
+        self.last_goal = None
+        self.last_goal_mode = None
+
+        if self.search_started_at is None:
+            self.search_started_at = now
+        elapsed = now - self.search_started_at
+
+        if self.last_target_at is None:
+            self._run_periodic_reacquisition(
+                elapsed,
+                sweep_first=True,
+            )
+            self._publish_visualization(None, None, None)
+            return
+
+        if elapsed > self.target_search_timeout:
+            self._run_periodic_reacquisition(
+                elapsed - self.target_search_timeout,
+                sweep_first=False,
+            )
+            self._publish_visualization(
+                None, self.last_target_map, None
+            )
+            return
+
+        robot = None
+        last_seen_error = None
+        transform = self._lookup_robot_transform(now)
+        if transform is not None:
+            robot_x = float(transform.transform.translation.x)
+            robot_y = float(transform.transform.translation.y)
+            robot_yaw = yaw_from_quaternion(
+                transform.transform.rotation
+            )
+            robot = (robot_x, robot_y)
+            if self.last_target_map is not None:
+                target_heading = math.atan2(
+                    self.last_target_map[1] - robot_y,
+                    self.last_target_map[0] - robot_x,
+                )
+                last_seen_error = angle_difference(
+                    target_heading, robot_yaw
+                )
+
+        if (
+            elapsed <= self.search_last_seen_duration
+            and last_seen_error is not None
+            and abs(last_seen_error) > self.search_yaw_tolerance
+        ):
+            self.search_phase = "LAST_KNOWN_POSITION"
+            self._publish_search_command(
+                clamp(
+                    1.5 * last_seen_error,
+                    -self.search_angular_speed,
+                    self.search_angular_speed,
+                )
+            )
+            self._set_status("SEARCHING_LAST_SEEN")
+        else:
+            self.search_phase = "ALTERNATING_SWEEP"
+            sweep_elapsed = max(
+                0.0, elapsed - self.search_last_seen_duration
+            )
+            sweep_index = int(
+                sweep_elapsed / self.search_sweep_period
+            )
+            initial_direction = (
+                -1.0
+                if self.last_target_bearing is not None
+                and self.last_target_bearing < 0.0
+                else 1.0
+            )
+            direction = (
+                initial_direction
+                if sweep_index % 2 == 0
+                else -initial_direction
+            )
+            self._publish_search_command(
+                direction * self.search_angular_speed
+            )
+            self._set_status("SEARCHING_SWEEP")
+
+        self._publish_visualization(
+            robot, self.last_target_map, None
+        )
+
+    def _run_periodic_reacquisition(self, elapsed, sweep_first):
+        cycle_duration = (
+            self.reacquire_sweep_duration + self.reacquire_pause_duration
+        )
+        cycle_index = int(max(0.0, elapsed) / cycle_duration)
+        cycle_elapsed = max(0.0, elapsed) % cycle_duration
+
+        if sweep_first:
+            sweeping = cycle_elapsed < self.reacquire_sweep_duration
+        else:
+            sweeping = cycle_elapsed >= self.reacquire_pause_duration
+
+        if not sweeping:
+            self.search_phase = "PERIODIC_REACQUIRE_PAUSE"
+            self._stop_direct_control()
+            self._set_status("TARGET_LOST")
+            return
+
+        initial_direction = (
+            -1.0
+            if self.last_target_bearing is not None
+            and self.last_target_bearing < 0.0
+            else 1.0
+        )
+        direction = (
+            initial_direction
+            if cycle_index % 2 == 0
+            else -initial_direction
+        )
+        self.search_phase = "PERIODIC_FULL_SWEEP"
+        self._publish_search_command(
+            direction * self.search_angular_speed
+        )
+        self._set_status("SEARCHING_REACQUIRE")
+
     def _publish_facing_command(self, target_bearing):
         command = Twist()
         command.angular.z = clamp(
@@ -526,11 +707,12 @@ class HumanFollower(Node):
         self.direct_command_publisher.publish(command)
         self.direct_control_active = True
 
-    def _publish_reacquire_command(self, last_target_bearing):
+    def _publish_search_command(self, angular_velocity):
         command = Twist()
-        direction = -1.0 if last_target_bearing < 0.0 else 1.0
-        command.angular.z = (
-            direction * self.target_reacquire_angular_speed
+        command.angular.z = clamp(
+            angular_velocity,
+            -self.search_angular_speed,
+            self.search_angular_speed,
         )
         self._publish_direct_control_active(True)
         self.direct_command_publisher.publish(command)

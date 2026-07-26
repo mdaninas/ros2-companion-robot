@@ -12,6 +12,8 @@
   <xacro:property name="wheel_mass" value="0.35"/>
 
   <xacro:property name="caster_radius" value="0.025"/>
+  <!-- Keep the 360-degree LiDAR above every other sensor and body part. -->
+  <xacro:property name="lidar_mount_z" value="0.380"/>
 
   <material name="body_orange">
     <color rgba="0.95 0.32 0.05 1.0"/>
@@ -355,10 +357,24 @@
         iyy="0.000253" iyz="0.0" izz="0.000203"/>
     </inertial>
   </link>
+  <!--
+    The LiDAR used to sit at z=0.165 m, where its scan plane intersected the
+    forward camera mast. Mount it above both cameras so a 360-degree scan
+    cannot report the robot itself as an obstacle.
+  -->
+  <xacro:fixed_cylinder_visual
+    name="lidar_pedestal"
+    parent="base_link"
+    xyz="-0.045 0 0.269"
+    rpy="0 0 0"
+    radius="0.014"
+    length="0.222"
+    material_name="hub_metal"
+    rgba_value="0.52 0.57 0.64 1.0"/>
   <joint name="lidar_joint" type="fixed">
     <parent link="base_link"/>
     <child link="lidar_link"/>
-    <origin xyz="-0.045 0 ${base_height + 0.045}"/>
+    <origin xyz="-0.045 0 ${lidar_mount_z}"/>
   </joint>
   <xacro:fixed_cylinder_visual
     name="lidar_status_ring"
@@ -553,7 +569,7 @@
       <pose>0.041 0 0 0 0 0</pose>
       <topic>/front_camera</topic>
       <gz_frame_id>front_camera_optical_frame</gz_frame_id>
-      <update_rate>10</update_rate>
+      <update_rate>8</update_rate>
       <always_on>true</always_on>
       <visualize>false</visualize>
       <camera>
@@ -581,7 +597,7 @@
       <pose>0.033 0 0 0 0 0</pose>
       <topic>/rear_camera</topic>
       <gz_frame_id>rear_camera_optical_frame</gz_frame_id>
-      <update_rate>15</update_rate>
+      <update_rate>10</update_rate>
       <always_on>true</always_on>
       <visualize>false</visualize>
       <camera>

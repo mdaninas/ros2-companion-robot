@@ -1,5 +1,7 @@
 moving_obstacle_controller:
   ros__parameters:
+    identity_name: person_alpha
+    enable_service: /set_person_alpha_enabled
     x_command_topic: /model/moving_pedestrian/joint/pedestrian_x_joint/cmd_vel
     y_command_topic: /model/moving_pedestrian/joint/pedestrian_y_joint/cmd_vel
     robot_odom_topic: /odom
@@ -22,8 +24,36 @@ moving_obstacle_controller:
     segment_speeds: [0.18, 0.25, 0.16, 0.22, 0.19, 0.26, 0.17, 0.23]
     pause_durations: [0.40, 0.10, 0.70, 0.20, 0.50, 0.15, 0.60, 0.30]
     waypoint_tolerance: 0.035
-    update_rate: 20.0
-    # When the robot blocks the route, wait for it to yield. Moving the person
-    # away here caused an artificial back-and-forth loop near the robot.
+    update_rate: 10.0
+    # Inside this zone, continue only along a configured route segment that
+    # increases clearance. This avoids both collisions and mutual waiting.
+    robot_avoidance_distance: 0.50
+    avoidance_hysteresis: 0.12
+
+moving_obstacle_controller_beta:
+  ros__parameters:
+    identity_name: person_beta
+    enable_service: /set_person_beta_enabled
+    x_command_topic: /model/moving_pedestrian_beta/joint/pedestrian_beta_x_joint/cmd_vel
+    y_command_topic: /model/moving_pedestrian_beta/joint/pedestrian_beta_y_joint/cmd_vel
+    robot_odom_topic: /odom
+    start_x: -0.65
+    start_y: 0.45
+    # This second route crosses the first person's route at different angles.
+    # That makes identity switching bugs visible without scripting fake poses.
+    waypoints: [
+      -0.65, 0.45,
+      -0.20, 0.45,
+      0.25, 0.25,
+      0.60, -0.15,
+      0.25, -0.50,
+      -0.20, -0.35,
+      -0.65, -0.10,
+      -0.25, 0.20
+    ]
+    segment_speeds: [0.16, 0.21, 0.18, 0.24, 0.17, 0.22, 0.19, 0.20]
+    pause_durations: [0.25, 0.55, 0.10, 0.35, 0.65, 0.15, 0.45, 0.20]
+    waypoint_tolerance: 0.035
+    update_rate: 10.0
     robot_avoidance_distance: 0.50
     avoidance_hysteresis: 0.12

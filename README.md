@@ -6,8 +6,8 @@ LiDAR, front and rear RGB cameras, manual control, noisy simulation odometry,
 SLAM, and a saved occupancy map.
 
 The current milestone is robust autonomous localization, navigation, waypoint
-patrol, energy-aware docking, mission-level recovery, person tracking, human
-following, and live RViz diagnostics with Nav2.
+patrol, energy-aware docking, mission-level recovery, multi-person identity
+tracking, safe human following, and live RViz diagnostics with Nav2.
 
 ## Features
 
@@ -32,7 +32,7 @@ following, and live RViz diagnostics with Nav2.
 - Safe stop and bounded recovery when the dock marker is obscured or lost
 - Energy-aware patrol with automatic low-battery docking, charging, undocking,
   and waypoint resumption
-- Moving pedestrian obstacle detected through LiDAR and the Nav2 costmaps
+- Two moving pedestrian obstacles detected through LiDAR and Nav2 costmaps
 - Direction-aware LiDAR slowdown and emergency-stop protection
 - Central mission state manager with automatic patrol and docking recovery
 - Velocity smoothing for less abrupt autonomous motion under WSL
@@ -40,8 +40,8 @@ following, and live RViz diagnostics with Nav2.
 - Costmap clearing before patrol replanning
 - Live autonomy health, patrol route, costmaps, and sensor status in RViz
 - Camera-and-LiDAR person detection using rendered sensor data
-- Human following with a hard minimum distance, continuous front-camera
-  alignment, safe retreat, and target-loss stop
+- Identity-locked human following with a hard minimum distance, continuous
+  front-camera alignment, safe retreat, and periodic lost-target reacquisition
 
 ## Current Status
 
@@ -69,6 +69,7 @@ following, and live RViz diagnostics with Nav2.
 | Autonomy diagnostics and RViz health overlay | Complete |
 | Front-camera person detection | Validated in simulation |
 | Human following and safe distance control | Validated in simulation |
+| Multi-person identity selection and lost-target recovery | Validated in simulation |
 | Physical robot deployment | Planned |
 
 ## Project Structure
@@ -85,11 +86,11 @@ following, and live RViz diagnostics with Nav2.
 |   |   |-- rviz/          # RViz model configuration
 |   |   `-- urdf/          # Parametric robot model
 |   |-- companion_robot_gazebo/
-|   |   |-- config/        # SLAM Toolbox parameters
+|   |   |-- config/        # SLAM and moving-person parameters
 |   |   |-- launch/        # Simulation and mapping launch files
 |   |   |-- maps/          # Saved occupancy maps
 |   |   |-- rviz/          # Simulation and mapping views
-|   |   |-- scripts/       # WASD teleoperation node
+|   |   |-- scripts/       # WASD and moving-person controllers
 |   |   `-- worlds/        # Gazebo arena
 |   |-- companion_robot_perception/
 |   |   |-- config/        # Dock-marker and person-detector parameters
@@ -138,6 +139,34 @@ source install/setup.bash
 ```
 
 ## Usage
+
+### Understand the Terminal Layout
+
+Run only one main launch file at a time. A launch such as
+`human_following.launch.py` already starts Gazebo, the robot, localization,
+Nav2, perception, behavior nodes, and RViz. Starting `arena.launch.py` or
+`navigation.launch.py` beside it creates a second competing simulation.
+
+Most demonstrations need two terminals:
+
+| Terminal | Purpose |
+| --- | --- |
+| Terminal 1 | Keep one complete launch running |
+| Terminal 2 | Send a service request or inspect status |
+
+The second terminal is not another robot process. It is only a temporary
+control and diagnostics console. Source ROS 2 and the workspace in every new
+terminal:
+
+```bash
+cd /path/to/companion_robot_ws
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+```
+
+After editing source files, rebuild the affected packages and restart Terminal
+1. A process that is already running does not reload changed Python or launch
+files automatically.
 
 ### Display the Robot in RViz
 
@@ -457,12 +486,12 @@ ros2 service call /recover_mission std_srvs/srv/Trigger "{}"
 
 ### Test a Moving Obstacle
 
-The arena contains a purple pedestrian dummy that follows a loop of varied
-waypoints instead of moving back and forth on one line. It walks diagonally,
-changes speed between segments, and pauses briefly at selected points. Start
-autonomous navigation, waypoint patrol, or the complete energy-aware patrol
-normally. The LiDAR marks this model in both Nav2 costmaps, allowing the local
-controller to slow down, stop, or select a clear trajectory around it.
+The arena contains two physical pedestrian dummies with different clothing
+colours and intersecting waypoint loops. They walk diagonally, change speed,
+and pause at different points. Start autonomous navigation, waypoint patrol,
+or the complete energy-aware patrol normally. LiDAR marks both models in the
+Nav2 costmaps, allowing the local controller to slow down, stop, or select a
+clear trajectory around them.
 
 For a clear demonstration, run the energy-aware patrol and observe the local
 costmap in RViz:
@@ -477,17 +506,19 @@ an obstacle, and publishes zero velocity if that path is unsafe. A person in
 front therefore does not prevent a safe reverse command, while an obstacle
 behind still does. Stale LiDAR or velocity input also produces a safe stop.
 Precision docking continues to use its separate front/rear LiDAR protection.
-The moving pedestrian uses a physics-constrained
-two-axis stage, so contact is resolved by Gazebo instead of passing through
-the robot. It waits when the robot enters its clearance zone and resumes after
-the robot moves away, modelling a pedestrian that avoids pushing the robot.
+Each moving pedestrian uses a physics-constrained two-axis stage, so contact
+is resolved by Gazebo instead of passing through the robot. If the robot enters
+the pedestrian's clearance zone, the pedestrian continues only along a
+configured route segment that increases separation. If no route segment is
+safe, it waits. This prevents both pushing and a permanent mutual-waiting
+deadlock without adding an artificial escape trajectory.
 
-If the robot enters the pedestrian's emergency-clearance zone, the pedestrian
-now walks away until the separation is safe instead of waiting indefinitely.
-The moving obstacle can be paused for comparison with the static arena:
+Each person can be paused independently for occlusion and recovery tests:
 
 ```bash
-ros2 service call /set_moving_obstacle_enabled \
+ros2 service call /set_person_alpha_enabled \
+  std_srvs/srv/SetBool "{data: false}"
+ros2 service call /set_person_beta_enabled \
   std_srvs/srv/SetBool "{data: false}"
 ```
 
@@ -504,11 +535,12 @@ front-camera person detector, following controller, and RViz together:
 ros2 launch companion_robot_behaviors human_following.launch.py
 ```
 
-The simulated person wears purple so the first vision implementation can
-segment it from the real rendered camera image. Camera bearing is associated
-with current LiDAR returns to estimate a metric target pose; the behavior does
-not read the person's ground-truth Gazebo pose. This intentionally keeps the
-first detector understandable and replaceable by a learned detector later.
+The simulated people wear purple (`person_alpha`) and blue (`person_beta`).
+The detector maintains a separate colour-and-range track for each identity.
+Camera bearing is associated with current LiDAR returns to estimate metric
+target poses; the behavior does not read either person's ground-truth Gazebo
+pose. Selecting one identity locks the follower to that person even when the
+two routes cross.
 
 The robot follows at a configured 0.70 metre surface distance and treats 0.58
 metres as a hard minimum. A retreat remains active until 0.66 metres so sensor
@@ -518,9 +550,13 @@ letting the global planner choose the turn direction. The robot holds that
 heading while nearby. An exclusive command mux prevents Nav2 from overwriting
 direct facing or retreat commands. The selected command still passes through
 velocity smoothing and direction-aware collision protection.
-If the target leaves the front camera, the current
-goal is cancelled and the robot stops; active search and identity recovery are
-a later milestone.
+If the selected target leaves the front camera, the current goal is cancelled.
+The robot first faces the last known map position, then performs a bounded
+left/right sweep. It resumes only when the same selected identity is detected
+again. After 15 seconds without reacquisition it briefly enters `TARGET_LOST`,
+then periodically performs a complete sweep. This keeps the robot stationary
+between attempts without permanently giving up or switching to the other
+person.
 
 Inspect the current state from a second sourced terminal:
 
@@ -529,17 +565,120 @@ ros2 service call /get_human_following_status std_srvs/srv/Trigger "{}"
 ```
 
 Expected runtime states are `SEARCHING`, `FOLLOWING`, `HOLDING_DISTANCE`,
-`TURNING_TO_PERSON`, `RETREATING`, and `TARGET_LOST`. Human following can be
-disabled and enabled without restarting the simulation:
+`TURNING_TO_PERSON`, `RETREATING`, `SEARCHING_LAST_SEEN`,
+`SEARCHING_SWEEP`, `SEARCHING_REACQUIRE`, and `TARGET_LOST`. The returned JSON
+includes `selected_identity`, `target_visible`, `target_distance`,
+`search_phase`, and the last known map position.
+
+List both tracks and see which identity is selected:
+
+```bash
+ros2 service call /get_person_targets std_srvs/srv/Trigger "{}"
+```
+
+Change the target while the simulation is running:
+
+```bash
+ros2 param set /person_detector selected_identity person_beta
+```
+
+Use `person_alpha` to switch back, or cycle through configured identities:
+
+```bash
+ros2 service call /cycle_person_target std_srvs/srv/Trigger "{}"
+```
+
+For a recovery test, let the selected person cross an obstacle or the camera
+edge. The normal sequence is:
+
+1. `SEARCHING_LAST_SEEN` while the robot faces the last known map position.
+2. `SEARCHING_SWEEP` during the initial bounded search.
+3. A brief safe `TARGET_LOST` pause if the first search expires.
+4. `SEARCHING_REACQUIRE` during each periodic complete sweep.
+5. `TURNING_TO_PERSON`, `FOLLOWING`, or `HOLDING_DISTANCE` after the same
+   identity is found again.
+
+The selected identity must remain unchanged throughout this sequence. The
+pause services stop route motion but do not hide a person from the sensors.
+Human following can also be disabled and enabled without restarting the
+simulation:
 
 ```bash
 ros2 service call /stop_human_following std_srvs/srv/Trigger "{}"
 ros2 service call /start_human_following std_srvs/srv/Trigger "{}"
 ```
 
-RViz displays the detected person and the current following goal. Enable the
-disabled `/person_detection/debug_image` Image display to inspect the front
-camera bounding box and fused range.
+RViz displays all fresh identity tracks, highlights the selected one, and
+shows the current following goal. Enable the disabled
+`/person_detection/debug_image` Image display to inspect labelled camera
+boxes and fused ranges.
+
+### Validate Human Following Manually
+
+Use two terminals. Start the complete stack in Terminal 1:
+
+```bash
+ros2 launch companion_robot_behaviors human_following.launch.py
+```
+
+In Terminal 2, select the other person and inspect the follower:
+
+```bash
+ros2 service call /cycle_person_target std_srvs/srv/Trigger "{}"
+ros2 service call /get_human_following_status std_srvs/srv/Trigger "{}"
+ros2 service call /get_person_targets std_srvs/srv/Trigger "{}"
+```
+
+After one cycle from the default selection, `selected_identity` should be
+`person_beta`, the blue person. Verify all of the following:
+
+- The robot turns its front camera toward the selected person.
+- It approaches and holds approximately 0.70 metres from the visible surface.
+- It enters `RETREATING` when the distance drops below 0.58 metres.
+- Losing the target causes a safe search rather than uncontrolled translation.
+- A later reacquisition still selects `person_beta`, even if `person_alpha` is
+  also visible.
+- The LiDAR scan remains aligned with the arena and contains no persistent
+  rays through the robot body.
+
+### Troubleshooting
+
+**A frame does not exist in RViz**
+
+Short frame warnings are normal while the simulation is starting. If the
+warning remains after Nav2 becomes active, stop the launch with `Ctrl+C`, make
+sure no other companion-robot launch is still running, source the workspace,
+and start one launch again. Do not run the arena, navigation, and behavior
+launch files simultaneously.
+
+**A recent source change does not appear**
+
+Rebuild the changed package, source the workspace again, and restart the main
+launch. For the current person-following stack:
+
+```bash
+colcon build --symlink-install --packages-select \
+  companion_robot_description companion_robot_gazebo \
+  companion_robot_navigation companion_robot_perception \
+  companion_robot_behaviors
+source install/setup.bash
+```
+
+**The robot is stationary**
+
+First inspect `/get_human_following_status` or `/get_mission_status`. A
+stationary robot can be correct: `HOLDING_DISTANCE`, `TARGET_LOST`,
+`CHARGING`, and collision-safety stop states intentionally command zero
+velocity. Treat `ERROR`, stale sensors, or a state that never changes as a
+fault requiring investigation.
+
+**Gazebo opens but `gz` is not found in a fresh terminal**
+
+Source ROS 2 first:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+```
 
 ## Main ROS Interfaces
 
@@ -563,7 +702,8 @@ camera bounding box and fused range.
 | `/get_autonomy_health` | `std_srvs/srv/Trigger` | Return combined mission, sensor, and localization health |
 | `/recover_mission` | `std_srvs/srv/Trigger` | Reset recovery limits and retry the failed mission |
 | `/recover_patrol` | `std_srvs/srv/Trigger` | Cancel and replan the current patrol goal |
-| `/set_moving_obstacle_enabled` | `std_srvs/srv/SetBool` | Pause or resume the moving obstacle |
+| `/set_person_alpha_enabled` | `std_srvs/srv/SetBool` | Pause or resume `person_alpha` |
+| `/set_person_beta_enabled` | `std_srvs/srv/SetBool` | Pause or resume `person_beta` |
 | `/docking_status` | `std_msgs/msg/String` | Latest docking state |
 | `/dock_marker/pose` | `geometry_msgs/msg/PoseStamped` | Marker pose relative to the rear camera |
 | `/dock_marker/visible` | `std_msgs/msg/Bool` | Whether the current image contains the marker |
@@ -580,7 +720,12 @@ camera bounding box and fused range.
 | `/battery_state` | `sensor_msgs/msg/BatteryState` | Simulated charge and power status |
 | `/person_detection/pose` | `geometry_msgs/msg/PoseStamped` | Camera-and-LiDAR target pose in the robot frame |
 | `/person_detection/status` | `std_msgs/msg/String` | Latest detector state |
+| `/person_detection/selected_identity` | `std_msgs/msg/String` | Identity currently locked for following |
+| `/person_detection/tracks` | `std_msgs/msg/String` | JSON snapshot of all configured identity tracks |
+| `/person_detection/tracks_visualization` | `visualization_msgs/msg/MarkerArray` | RViz markers and labels for fresh person tracks |
 | `/person_detection/debug_image` | `sensor_msgs/msg/Image` | Annotated front-camera image |
+| `/get_person_targets` | `std_srvs/srv/Trigger` | Return selected identity and all current tracks |
+| `/cycle_person_target` | `std_srvs/srv/Trigger` | Select the next configured person identity |
 | `/human_following/status` | `std_msgs/msg/String` | Latest human-following state |
 | `/get_human_following_status` | `std_srvs/srv/Trigger` | Return target range and following state |
 | `/start_human_following` | `std_srvs/srv/Trigger` | Enable human following |
@@ -593,8 +738,8 @@ remains available for later wheel-slip and encoder-odometry experiments.
 
 ## Roadmap
 
-- Add person identity selection and lost-person recovery
 - Validate camera-guided docking under changing light and stronger occlusion
+- Add richer person-motion prediction and social-navigation behavior
 - Replace pose odometry with fused wheel encoder and IMU odometry
 - Transfer the software stack to physical hardware
 

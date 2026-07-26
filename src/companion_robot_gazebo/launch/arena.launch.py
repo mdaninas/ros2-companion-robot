@@ -93,6 +93,16 @@ def generate_launch_description():
                 "pedestrian_y_joint/cmd_vel"
                 "@std_msgs/msg/Float64]gz.msgs.Double"
             ),
+            (
+                "/model/moving_pedestrian_beta/joint/"
+                "pedestrian_beta_x_joint/cmd_vel"
+                "@std_msgs/msg/Float64]gz.msgs.Double"
+            ),
+            (
+                "/model/moving_pedestrian_beta/joint/"
+                "pedestrian_beta_y_joint/cmd_vel"
+                "@std_msgs/msg/Float64]gz.msgs.Double"
+            ),
             # Gazebo -> ROS stable pose odometry, wheel odometry, and TF.
             "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
             "/wheel_odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
@@ -134,6 +144,14 @@ def generate_launch_description():
         package="companion_robot_gazebo",
         executable="moving_obstacle_controller",
         name="moving_obstacle_controller",
+        output="screen",
+        parameters=[moving_obstacle_params, {"use_sim_time": True}],
+        condition=IfCondition(moving_obstacle),
+    )
+    moving_obstacle_controller_beta = Node(
+        package="companion_robot_gazebo",
+        executable="moving_obstacle_controller",
+        name="moving_obstacle_controller_beta",
         output="screen",
         parameters=[moving_obstacle_params, {"use_sim_time": True}],
         condition=IfCondition(moving_obstacle),
@@ -194,6 +212,7 @@ def generate_launch_description():
             robot_state_publisher,
             bridge,
             moving_obstacle_controller,
+            moving_obstacle_controller_beta,
             rviz,
             spawn_robot,
         ]

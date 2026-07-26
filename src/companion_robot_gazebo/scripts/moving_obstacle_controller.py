@@ -25,6 +25,10 @@ class MovingObstacleController(Node):
             "/model/moving_pedestrian/joint/pedestrian_y_joint/cmd_vel",
         )
         self.declare_parameter("robot_odom_topic", "/odom")
+        self.declare_parameter("identity_name", "person_alpha")
+        self.declare_parameter(
+            "enable_service", "/set_person_alpha_enabled"
+        )
         self.declare_parameter("start_x", 0.75)
         self.declare_parameter("start_y", -0.55)
         self.declare_parameter(
@@ -69,6 +73,12 @@ class MovingObstacleController(Node):
         )
         self.robot_odom_topic = str(
             self.get_parameter("robot_odom_topic").value
+        )
+        self.identity_name = str(
+            self.get_parameter("identity_name").value
+        )
+        self.enable_service_name = str(
+            self.get_parameter("enable_service").value
         )
         self.position = [
             float(self.get_parameter("start_x").value),
@@ -123,19 +133,21 @@ class MovingObstacleController(Node):
         )
         self.enable_service = self.create_service(
             SetBool,
-            "/set_moving_obstacle_enabled",
+            self.enable_service_name,
             self._set_enabled,
         )
         self.timer = self.create_timer(1.0 / self.update_rate, self._update)
 
         self.get_logger().info(
-            "Physics-based pedestrian ready with %d waypoints, speeds "
-            "%.2f-%.2f m/s, and robot clearance %.2f m."
+            "%s ready with %d waypoints, speeds %.2f-%.2f m/s, robot "
+            "clearance %.2f m, and pause service %s."
             % (
+                self.identity_name,
                 len(self.waypoints),
                 min(self.segment_speeds),
                 max(self.segment_speeds),
                 self.robot_avoidance_distance,
+                self.enable_service_name,
             )
         )
 
@@ -173,9 +185,9 @@ class MovingObstacleController(Node):
         self.last_time = self.get_clock().now()
         response.success = True
         response.message = (
-            "Moving pedestrian resumed."
+            f"{self.identity_name} resumed."
             if self.enabled
-            else "Moving pedestrian paused."
+            else f"{self.identity_name} paused."
         )
         self.get_logger().info(response.message)
         return response
@@ -218,9 +230,10 @@ class MovingObstacleController(Node):
                 self.pause_until = now + Duration(seconds=pause)
             next_target = self.waypoints[self.target_index]
             self.get_logger().info(
-                "Pedestrian reached waypoint %d; pausing %.2f s, then "
+                "%s reached waypoint %d; pausing %.2f s, then "
                 "heading to (%.2f, %.2f)."
                 % (
+                    self.identity_name,
                     reached_index + 1,
                     pause,
                     next_target[0],
@@ -242,34 +255,72 @@ class MovingObstacleController(Node):
             return False
 
         distance = math.dist(self.position, self.robot_position)
+        resume_distance = (
+            self.robot_avoidance_distance + self.avoidance_hysteresis
+        )
         if self.robot_clearance_active:
-            resume_distance = (
-                self.robot_avoidance_distance + self.avoidance_hysteresis
-            )
             if distance >= resume_distance:
                 self.robot_clearance_active = False
                 self.get_logger().info(
                     "Robot cleared the pedestrian path; route resumed."
                 )
                 return False
-            self._publish_velocity(0.0, 0.0)
-            return True
 
         if distance <= self.robot_avoidance_distance:
-            self.robot_clearance_active = True
-            self.get_logger().info(
-                "Robot entered the pedestrian clearance zone; pedestrian "
-                "is waiting for a clear path."
-            )
+            if not self.robot_clearance_active:
+                self.robot_clearance_active = True
+                self.get_logger().info(
+                    "Robot entered the pedestrian clearance zone."
+                )
 
         if not self.robot_clearance_active:
             return False
 
-        # The pedestrian should not oscillate back and forth around a robot
-        # that is already trying to yield. Hold the route position until the
-        # robot has retreated, then continue toward the same waypoint.
+        if self._route_moves_away_from_robot(self.target_index):
+            return False
+
+        clearance_index = self._find_route_away_from_robot()
+        if clearance_index is not None:
+            if clearance_index != self.target_index:
+                self.target_index = clearance_index
+                self.pause_until = None
+                target = self.waypoints[self.target_index]
+                self.get_logger().info(
+                    "%s changed route toward (%.2f, %.2f) to clear the robot."
+                    % (self.identity_name, target[0], target[1])
+                )
+            return False
+
+        # If none of the configured route segments initially increases
+        # clearance, wait rather than introducing an artificial escape motion.
         self._publish_velocity(0.0, 0.0)
         return True
+
+    def _route_moves_away_from_robot(self, waypoint_index):
+        target = self.waypoints[waypoint_index]
+        route_x = target[0] - self.position[0]
+        route_y = target[1] - self.position[1]
+        route_length = math.hypot(route_x, route_y)
+        if route_length <= self.waypoint_tolerance:
+            return False
+
+        away_x = self.position[0] - self.robot_position[0]
+        away_y = self.position[1] - self.robot_position[1]
+        away_length = math.hypot(away_x, away_y)
+        if away_length <= 1e-6:
+            return False
+
+        outward_alignment = (
+            route_x * away_x + route_y * away_y
+        ) / (route_length * away_length)
+        return outward_alignment >= 0.10
+
+    def _find_route_away_from_robot(self):
+        for offset in range(1, len(self.waypoints)):
+            candidate = (self.target_index + offset) % len(self.waypoints)
+            if self._route_moves_away_from_robot(candidate):
+                return candidate
+        return None
 
     def _publish_velocity(self, velocity_x, velocity_y):
         x_message = Float64()
