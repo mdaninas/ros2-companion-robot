@@ -1,0 +1,46 @@
+human_follower:
+  ros__parameters:
+    target_pose_topic: /person_detection/pose
+    target_visible_topic: /person_detection/visible
+    # Direct turns and retreat use an exclusive behavior channel. The command
+    # mux selects it instead of Nav2 before smoothing and safety filtering.
+    direct_command_topic: /cmd_vel_behavior_raw
+    direct_control_active_topic: /cmd_vel_behavior_active
+    map_frame: map
+    robot_frame: base_footprint
+    autostart: true
+
+    # Distance is measured to the LiDAR-visible front surface of the person.
+    follow_distance: 0.70
+    # Crossing this hard limit makes the robot retreat to follow_distance.
+    minimum_distance: 0.58
+    # Once retreat starts, keep it active past sensor noise and Nav2 tolerance.
+    retreat_release_distance: 0.66
+    distance_tolerance: 0.08
+    # Keep the fixed front camera facing the person before translating.
+    face_yaw_tolerance: 0.08
+    face_before_follow_yaw: 0.18
+    face_angular_gain: 1.8
+    max_face_angular_speed: 0.45
+    # Retreat directly while steering the fixed camera back toward the person.
+    retreat_linear_speed: 0.10
+    retreat_angular_gain: 1.4
+    max_retreat_angular_speed: 0.45
+    # If a rear obstacle blocks retreat, briefly turn toward the other side
+    # instead of remaining wedged between the person and the obstacle.
+    safety_status_topic: /collision_safety/status
+    retreat_blocked_timeout: 0.60
+    retreat_escape_duration: 1.00
+    retreat_escape_angular_speed: 0.30
+    target_timeout: 1.5
+    # If the person slips just beyond the fixed camera edge, keep turning
+    # briefly toward the last sighting instead of freezing in their path.
+    target_reacquire_timeout: 5.0
+    target_reacquire_angular_speed: 0.28
+    goal_update_interval: 1.0
+    goal_update_distance: 0.20
+    goal_update_yaw: 0.15
+    minimum_goal_displacement: 0.10
+    navigation_retry_delay: 1.5
+    maximum_goal_failures: 5
+    update_frequency: 10.0

@@ -1,0 +1,23 @@
+directional_safety_filter:
+  ros__parameters:
+    input_topic: /cmd_vel_nav
+    output_topic: /cmd_vel
+    scan_topic: /scan
+    update_rate: 25.0
+    command_timeout: 0.50
+    scan_timeout: 0.50
+
+    # Ignore returns from the robot body, then protect only the travel direction.
+    minimum_scan_range: 0.27
+    slowdown_ratio: 0.35
+    front_stop_distance: 0.40
+    front_slowdown_distance: 0.85
+    # The LiDAR sits 0.13 m ahead of the rear body edge. Stopping at 0.30 m
+    # therefore preserves roughly 0.17 m of physical rear clearance.
+    rear_stop_distance: 0.30
+    rear_slowdown_distance: 0.58
+    side_stop_distance: 0.34
+    side_slowdown_distance: 0.50
+
+    linear_epsilon: 0.01
+    angular_epsilon: 0.03

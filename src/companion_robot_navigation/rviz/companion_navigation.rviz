@@ -226,6 +226,44 @@ Visualization Manager:
       Name: Dock Camera Debug
       Normalize Range: true
       Value: false
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Marker Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /person_detection/visualization
+      Name: Detected Person
+      Namespaces:
+        {}
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Marker Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /human_following/visualization
+      Name: Human Following
+      Namespaces:
+        {}
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Image Topic:
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /person_detection/debug_image
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Person Camera Debug
+      Normalize Range: true
+      Value: false
     - Class: rviz_default_plugins/TF
       Enabled: false
       Frame Timeout: 15
@@ -276,4 +314,3 @@ Visualization Manager:
 Window Geometry:
   Height: 900
   Width: 1400
-

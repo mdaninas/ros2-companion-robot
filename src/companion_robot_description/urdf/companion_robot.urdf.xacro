@@ -465,6 +465,14 @@
     material_name="accent_cyan"
     rgba_value="0.00 0.78 0.95 1.0"/>
 
+  <!-- ROS optical convention: +Z forward, +X right, +Y down. -->
+  <link name="front_camera_optical_frame"/>
+  <joint name="front_camera_optical_joint" type="fixed">
+    <parent link="camera_link"/>
+    <child link="front_camera_optical_frame"/>
+    <origin xyz="0.041 0 0" rpy="${-pi / 2.0} 0 ${-pi / 2.0}"/>
+  </joint>
+
   <!-- Rear camera watches the docking marker while the robot reverses. -->
   <link name="rear_camera_link">
     <visual name="rear_camera_housing">
@@ -536,6 +544,35 @@
           <stddev>0.008</stddev>
         </noise>
       </lidar>
+    </sensor>
+  </gazebo>
+
+  <!-- Forward RGB stream for simulated person detection and tracking. -->
+  <gazebo reference="camera_link">
+    <sensor name="front_person_camera" type="camera">
+      <pose>0.041 0 0 0 0 0</pose>
+      <topic>/front_camera</topic>
+      <gz_frame_id>front_camera_optical_frame</gz_frame_id>
+      <update_rate>10</update_rate>
+      <always_on>true</always_on>
+      <visualize>false</visualize>
+      <camera>
+        <horizontal_fov>1.3962634</horizontal_fov>
+        <image>
+          <width>424</width>
+          <height>240</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.05</near>
+          <far>6.0</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.004</stddev>
+        </noise>
+      </camera>
     </sensor>
   </gazebo>
 

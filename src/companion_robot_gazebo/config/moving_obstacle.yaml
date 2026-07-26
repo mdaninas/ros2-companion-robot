@@ -1,10 +1,29 @@
 moving_obstacle_controller:
   ros__parameters:
-    command_topic: /model/moving_pedestrian/joint/pedestrian_slide_joint/cmd_vel
+    x_command_topic: /model/moving_pedestrian/joint/pedestrian_x_joint/cmd_vel
+    y_command_topic: /model/moving_pedestrian/joint/pedestrian_y_joint/cmd_vel
     robot_odom_topic: /odom
-    x: 0.80
-    y_min: -1.25
-    y_max: 1.25
-    speed: 0.22
-    update_rate: 10.0
-    robot_avoidance_distance: 0.70
+    start_x: 0.75
+    start_y: -0.55
+    # This varied loop stays in the open center of the arena. It also leaves a
+    # follow-distance corridor around the person, so the robot is not pulled
+    # against the pillar or a wall before it needs to retreat.
+    waypoints: [
+      0.75, -0.55,
+      0.75, -0.10,
+      0.55, 0.35,
+      0.10, 0.55,
+      -0.35, 0.35,
+      -0.55, -0.10,
+      -0.25, -0.55,
+      0.25, -0.65
+    ]
+    # Each destination has its own walking speed and pause duration.
+    segment_speeds: [0.18, 0.25, 0.16, 0.22, 0.19, 0.26, 0.17, 0.23]
+    pause_durations: [0.40, 0.10, 0.70, 0.20, 0.50, 0.15, 0.60, 0.30]
+    waypoint_tolerance: 0.035
+    update_rate: 20.0
+    # When the robot blocks the route, wait for it to yield. Moving the person
+    # away here caused an artificial back-and-forth loop near the robot.
+    robot_avoidance_distance: 0.50
+    avoidance_hysteresis: 0.12

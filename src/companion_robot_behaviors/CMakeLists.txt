@@ -38,4 +38,10 @@ install(
   RENAME autonomy_diagnostics
 )
 
+install(
+  PROGRAMS scripts/human_follower.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME human_follower
+)
+
 ament_package()

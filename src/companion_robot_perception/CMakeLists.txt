@@ -14,4 +14,10 @@ install(
   RENAME dock_marker_detector
 )
 
+install(
+  PROGRAMS scripts/person_detector.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME person_detector
+)
+
 ament_package()

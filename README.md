@@ -2,12 +2,12 @@
 
 A mobile companion-rover simulation built with ROS 2 Jazzy and Gazebo
 Harmonic. The project covers the robot model, differential-drive motion, 2D
-LiDAR, a rear RGB camera, manual control, noisy simulation odometry, SLAM, and
-a saved occupancy map.
+LiDAR, front and rear RGB cameras, manual control, noisy simulation odometry,
+SLAM, and a saved occupancy map.
 
 The current milestone is robust autonomous localization, navigation, waypoint
-patrol, energy-aware docking, mission-level recovery, and live RViz diagnostics
-with Nav2.
+patrol, energy-aware docking, mission-level recovery, person tracking, human
+following, and live RViz diagnostics with Nav2.
 
 ## Features
 
@@ -16,6 +16,7 @@ with Nav2.
 - Two drive wheels and front/rear caster support
 - Simulated 360-degree 2D LiDAR
 - Simulated rear RGB camera with ROS image and calibration topics
+- Simulated front RGB camera for person detection
 - Safe terminal teleoperation using `W`, `A`, `S`, and `D`
 - Gazebo pose odometry with modest measurement noise on `/odom`
 - Encoder-style wheel odometry on `/wheel_odom` for comparison
@@ -32,12 +33,15 @@ with Nav2.
 - Energy-aware patrol with automatic low-battery docking, charging, undocking,
   and waypoint resumption
 - Moving pedestrian obstacle detected through LiDAR and the Nav2 costmaps
-- Nav2 360-degree collision slowdown and emergency-stop zones
+- Direction-aware LiDAR slowdown and emergency-stop protection
 - Central mission state manager with automatic patrol and docking recovery
 - Velocity smoothing for less abrupt autonomous motion under WSL
 - Two-stage AMCL recovery using a sensor refresh, then global relocalization
 - Costmap clearing before patrol replanning
 - Live autonomy health, patrol route, costmaps, and sensor status in RViz
+- Camera-and-LiDAR person detection using rendered sensor data
+- Human following with a hard minimum distance, continuous front-camera
+  alignment, safe retreat, and target-loss stop
 
 ## Current Status
 
@@ -63,6 +67,8 @@ with Nav2.
 | Dynamic obstacle avoidance | Validated in simulation |
 | Mission state and autonomous recovery | Validated in simulation |
 | Autonomy diagnostics and RViz health overlay | Complete |
+| Front-camera person detection | Validated in simulation |
+| Human following and safe distance control | Validated in simulation |
 | Physical robot deployment | Planned |
 
 ## Project Structure
@@ -71,7 +77,7 @@ with Nav2.
 .
 |-- src/
 |   |-- companion_robot_behaviors/
-|   |   |-- config/        # Patrol, docking, battery, mission, and diagnostics
+|   |   |-- config/        # Patrol, docking, following, battery, and mission
 |   |   |-- launch/        # Autonomous behavior launch files
 |   |   `-- scripts/       # Patrol, docking, battery, and mission nodes
 |   |-- companion_robot_description/
@@ -86,8 +92,8 @@ with Nav2.
 |   |   |-- scripts/       # WASD teleoperation node
 |   |   `-- worlds/        # Gazebo arena
 |   |-- companion_robot_perception/
-|   |   |-- config/        # Dock-marker detector parameters
-|   |   `-- scripts/       # Rear-camera marker detection node
+|   |   |-- config/        # Dock-marker and person-detector parameters
+|   |   `-- scripts/       # Rear-marker and front-person perception nodes
 |   `-- companion_robot_navigation/
 |       |-- config/        # AMCL, costmap, planner, and controller parameters
 |       |-- launch/        # Autonomous-navigation launch file
@@ -451,11 +457,12 @@ ros2 service call /recover_mission std_srvs/srv/Trigger "{}"
 
 ### Test a Moving Obstacle
 
-The arena contains a purple pedestrian dummy that continuously crosses the
-patrol route. Start autonomous navigation, waypoint patrol, or the complete
-energy-aware patrol normally. The LiDAR marks this model in both Nav2
-costmaps, allowing the local controller to slow down, stop, or select a clear
-trajectory around it.
+The arena contains a purple pedestrian dummy that follows a loop of varied
+waypoints instead of moving back and forth on one line. It walks diagonally,
+changes speed between segments, and pauses briefly at selected points. Start
+autonomous navigation, waypoint patrol, or the complete energy-aware patrol
+normally. The LiDAR marks this model in both Nav2 costmaps, allowing the local
+controller to slow down, stop, or select a clear trajectory around it.
 
 For a clear demonstration, run the energy-aware patrol and observe the local
 costmap in RViz:
@@ -464,15 +471,19 @@ costmap in RViz:
 ros2 launch companion_robot_behaviors energy_patrol.launch.py
 ```
 
-The Collision Monitor receives only Nav2 velocity commands. Its 360-degree
-slowdown and emergency-stop envelopes protect the front, sides, and rear of
-the robot. It first reduces the requested speed and publishes zero velocity if
-an obstacle gets too close. Precision docking continues to use its separate
-front/rear LiDAR protection. The moving pedestrian uses a physics-constrained
-slide joint, so contact is resolved by Gazebo instead of passing through the
-robot. It also reverses before entering the robot's clearance zone, modelling
-a pedestrian that reacts instead of continuously pushing the robot.
+The directional safety filter receives only smoothed Nav2 velocity commands.
+It checks the LiDAR sector in the requested travel direction, slows down near
+an obstacle, and publishes zero velocity if that path is unsafe. A person in
+front therefore does not prevent a safe reverse command, while an obstacle
+behind still does. Stale LiDAR or velocity input also produces a safe stop.
+Precision docking continues to use its separate front/rear LiDAR protection.
+The moving pedestrian uses a physics-constrained
+two-axis stage, so contact is resolved by Gazebo instead of passing through
+the robot. It waits when the robot enters its clearance zone and resumes after
+the robot moves away, modelling a pedestrian that avoids pushing the robot.
 
+If the robot enters the pedestrian's emergency-clearance zone, the pedestrian
+now walks away until the separation is safe instead of waiting indefinitely.
 The moving obstacle can be paused for comparison with the static arena:
 
 ```bash
@@ -484,6 +495,52 @@ Change `false` to `true` to resume it. Launch the arena with
 `moving_obstacle:=false` when the controller should remain disabled for the
 whole session.
 
+### Follow the Simulated Person
+
+The human-following launch starts the arena, saved-map localization, Nav2,
+front-camera person detector, following controller, and RViz together:
+
+```bash
+ros2 launch companion_robot_behaviors human_following.launch.py
+```
+
+The simulated person wears purple so the first vision implementation can
+segment it from the real rendered camera image. Camera bearing is associated
+with current LiDAR returns to estimate a metric target pose; the behavior does
+not read the person's ground-truth Gazebo pose. This intentionally keeps the
+first detector understandable and replaceable by a learned detector later.
+
+The robot follows at a configured 0.70 metre surface distance and treats 0.58
+metres as a hard minimum. A retreat remains active until 0.66 metres so sensor
+noise cannot immediately cancel it. During retreat, a direct bounded controller
+reverses while steering the fixed front camera toward the person instead of
+letting the global planner choose the turn direction. The robot holds that
+heading while nearby. An exclusive command mux prevents Nav2 from overwriting
+direct facing or retreat commands. The selected command still passes through
+velocity smoothing and direction-aware collision protection.
+If the target leaves the front camera, the current
+goal is cancelled and the robot stops; active search and identity recovery are
+a later milestone.
+
+Inspect the current state from a second sourced terminal:
+
+```bash
+ros2 service call /get_human_following_status std_srvs/srv/Trigger "{}"
+```
+
+Expected runtime states are `SEARCHING`, `FOLLOWING`, `HOLDING_DISTANCE`,
+`TURNING_TO_PERSON`, `RETREATING`, and `TARGET_LOST`. Human following can be
+disabled and enabled without restarting the simulation:
+
+```bash
+ros2 service call /stop_human_following std_srvs/srv/Trigger "{}"
+ros2 service call /start_human_following std_srvs/srv/Trigger "{}"
+```
+
+RViz displays the detected person and the current following goal. Enable the
+disabled `/person_detection/debug_image` Image display to inspect the front
+camera bounding box and fused range.
+
 ## Main ROS Interfaces
 
 | Interface | Type | Purpose |
@@ -492,6 +549,7 @@ whole session.
 | `/scan` | `sensor_msgs/msg/LaserScan` | Simulated 2D LiDAR scan |
 | `/rear_camera/image_raw` | `sensor_msgs/msg/Image` | Simulated rear RGB image |
 | `/rear_camera/camera_info` | `sensor_msgs/msg/CameraInfo` | Rear-camera calibration |
+| `/front_camera/image_raw` | `sensor_msgs/msg/Image` | Simulated front RGB image |
 | `/odom` | `nav_msgs/msg/Odometry` | Stable Gazebo pose odometry |
 | `/wheel_odom` | `nav_msgs/msg/Odometry` | Wheel-based odometry |
 | `/joint_states` | `sensor_msgs/msg/JointState` | Wheel joint states |
@@ -520,6 +578,13 @@ whole session.
 | `/autonomy/visualization` | `visualization_msgs/msg/MarkerArray` | Coloured status indicator and mission text in RViz |
 | `/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Detailed subsystem health for ROS diagnostic tools |
 | `/battery_state` | `sensor_msgs/msg/BatteryState` | Simulated charge and power status |
+| `/person_detection/pose` | `geometry_msgs/msg/PoseStamped` | Camera-and-LiDAR target pose in the robot frame |
+| `/person_detection/status` | `std_msgs/msg/String` | Latest detector state |
+| `/person_detection/debug_image` | `sensor_msgs/msg/Image` | Annotated front-camera image |
+| `/human_following/status` | `std_msgs/msg/String` | Latest human-following state |
+| `/get_human_following_status` | `std_srvs/srv/Trigger` | Return target range and following state |
+| `/start_human_following` | `std_srvs/srv/Trigger` | Enable human following |
+| `/stop_human_following` | `std_srvs/srv/Trigger` | Cancel the goal and stop following |
 
 The `/odom` topic comes from Gazebo's pose-based odometry publisher with modest
 Gaussian measurement noise. This keeps the simulation approachable while
@@ -528,7 +593,6 @@ remains available for later wheel-slip and encoder-odometry experiments.
 
 ## Roadmap
 
-- Add person detection and human-following companion behaviour
 - Add person identity selection and lost-person recovery
 - Validate camera-guided docking under changing light and stronger occlusion
 - Replace pose odometry with fused wheel encoder and IMU odometry

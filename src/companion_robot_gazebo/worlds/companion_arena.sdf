@@ -178,15 +178,28 @@
     </model>
 
     <!--
-      A dynamic pedestrian dummy crosses the patrol route at x = 0.80 m.
-      A world-anchored prismatic joint keeps it upright and on its path while
-      Gazebo's physics engine still resolves contact with the robot.
+      A dynamic pedestrian dummy follows a multi-point route. Two chained
+      world-anchored prismatic joints allow physical X/Y movement while
+      keeping it upright, so Gazebo still resolves contact with the robot.
     -->
     <model name="moving_pedestrian">
       <static>false</static>
       <allow_auto_disable>false</allow_auto_disable>
-      <pose>0.80 -1.25 0.45 0 0 1.5708</pose>
+      <pose>0.75 -0.55 0.45 0 0 0</pose>
+      <!-- An invisible carriage provides the first axis of the X/Y stage. -->
+      <link name="x_carriage_link">
+        <gravity>false</gravity>
+        <inertial>
+          <mass>0.10</mass>
+          <inertia>
+            <ixx>0.001</ixx>
+            <iyy>0.001</iyy>
+            <izz>0.001</izz>
+          </inertia>
+        </inertial>
+      </link>
       <link name="pedestrian_link">
+        <gravity>false</gravity>
         <inertial>
           <mass>20.0</mass>
           <inertia>
@@ -205,9 +218,12 @@
             </friction>
           </surface>
         </collision>
-        <visual name="body_visual">
+        <!-- Purple clothing gives the simulated vision detector a real image
+             feature while the separate shapes keep the target human-like. -->
+        <visual name="torso_visual">
+          <pose>0 0 0.08 0 0 0</pose>
           <geometry>
-            <cylinder><radius>0.22</radius><length>0.90</length></cylinder>
+            <box><size>0.30 0.18 0.44</size></box>
           </geometry>
           <material>
             <ambient>0.42 0.04 0.62 1</ambient>
@@ -215,11 +231,37 @@
             <specular>0.30 0.12 0.42 1</specular>
           </material>
         </visual>
-        <visual name="direction_band">
-          <pose>0 0 0.20 0 0 0</pose>
+        <visual name="left_leg_visual">
+          <pose>0 0.09 -0.27 0 0 0</pose>
           <geometry>
-            <cylinder><radius>0.225</radius><length>0.08</length></cylinder>
+            <cylinder><radius>0.065</radius><length>0.36</length></cylinder>
           </geometry>
+          <material>
+            <ambient>0.30 0.03 0.46 1</ambient>
+            <diffuse>0.58 0.07 0.82 1</diffuse>
+          </material>
+        </visual>
+        <visual name="right_leg_visual">
+          <pose>0 -0.09 -0.27 0 0 0</pose>
+          <geometry>
+            <cylinder><radius>0.065</radius><length>0.36</length></cylinder>
+          </geometry>
+          <material>
+            <ambient>0.30 0.03 0.46 1</ambient>
+            <diffuse>0.58 0.07 0.82 1</diffuse>
+          </material>
+        </visual>
+        <visual name="head_visual">
+          <pose>0 0 0.43 0 0 0</pose>
+          <geometry><sphere><radius>0.13</radius></sphere></geometry>
+          <material>
+            <ambient>0.58 0.30 0.16 1</ambient>
+            <diffuse>0.92 0.58 0.34 1</diffuse>
+          </material>
+        </visual>
+        <visual name="identity_band">
+          <pose>0.156 0 0.13 0 1.5708 0</pose>
+          <geometry><box><size>0.012 0.13 0.09</size></box></geometry>
           <material>
             <ambient>0.95 0.62 0.03 1</ambient>
             <diffuse>1.00 0.82 0.08 1</diffuse>
@@ -227,14 +269,32 @@
           </material>
         </visual>
       </link>
-      <joint name="pedestrian_slide_joint" type="prismatic">
+      <joint name="pedestrian_x_joint" type="prismatic">
         <parent>world</parent>
-        <child>pedestrian_link</child>
+        <child>x_carriage_link</child>
         <axis>
           <xyz expressed_in="__model__">1 0 0</xyz>
           <limit>
-            <lower>0.0</lower>
-            <upper>2.5</upper>
+            <lower>-1.85</lower>
+            <upper>0.75</upper>
+            <effort>500.0</effort>
+            <velocity>0.35</velocity>
+          </limit>
+          <dynamics>
+            <damping>0.2</damping>
+          </dynamics>
+        </axis>
+      </joint>
+      <joint name="pedestrian_y_joint" type="prismatic">
+        <parent>x_carriage_link</parent>
+        <child>pedestrian_link</child>
+        <axis>
+          <xyz expressed_in="__model__">0 1 0</xyz>
+          <limit>
+            <!-- The route reaches 0.10 m south and 1.10 m north of the
+                 model's initial Y position. Keep a small physical margin. -->
+            <lower>-0.15</lower>
+            <upper>1.20</upper>
             <effort>500.0</effort>
             <velocity>0.35</velocity>
           </limit>
@@ -246,7 +306,12 @@
       <plugin
         filename="gz-sim-joint-controller-system"
         name="gz::sim::systems::JointController">
-        <joint_name>pedestrian_slide_joint</joint_name>
+        <joint_name>pedestrian_x_joint</joint_name>
+      </plugin>
+      <plugin
+        filename="gz-sim-joint-controller-system"
+        name="gz::sim::systems::JointController">
+        <joint_name>pedestrian_y_joint</joint_name>
       </plugin>
     </model>
 

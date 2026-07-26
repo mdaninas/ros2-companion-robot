@@ -26,6 +26,12 @@ def generate_launch_description():
     default_params = PathJoinSubstitution(
         [navigation_share, "config", "nav2_params.yaml"]
     )
+    safety_filter_params = PathJoinSubstitution(
+        [navigation_share, "config", "safety_filter.yaml"]
+    )
+    command_mux_params = PathJoinSubstitution(
+        [navigation_share, "config", "velocity_command_mux.yaml"]
+    )
     rviz_config = PathJoinSubstitution(
         [navigation_share, "rviz", "companion_navigation.rviz"]
     )
@@ -95,9 +101,17 @@ def generate_launch_description():
         output="screen",
         parameters=common_parameters,
         remappings=[
-            ("cmd_vel", "/cmd_vel_nav_raw"),
+            ("cmd_vel", "/cmd_vel_selected"),
             ("cmd_vel_smoothed", "/cmd_vel_nav"),
         ],
+    )
+
+    velocity_command_mux = Node(
+        package="companion_robot_navigation",
+        executable="velocity_command_mux",
+        name="velocity_command_mux",
+        output="screen",
+        parameters=[command_mux_params, {"use_sim_time": True}],
     )
 
     planner_server = Node(
@@ -114,15 +128,15 @@ def generate_launch_description():
         name="behavior_server",
         output="screen",
         parameters=common_parameters,
-        remappings=[("cmd_vel", "/cmd_vel_nav")],
+        remappings=[("cmd_vel", "/cmd_vel_nav_raw")],
     )
 
-    collision_monitor = Node(
-        package="nav2_collision_monitor",
-        executable="collision_monitor",
-        name="collision_monitor",
+    directional_safety_filter = Node(
+        package="companion_robot_navigation",
+        executable="directional_safety_filter",
+        name="directional_safety_filter",
         output="screen",
-        parameters=common_parameters,
+        parameters=[safety_filter_params, {"use_sim_time": True}],
     )
 
     bt_navigator = Node(
@@ -148,7 +162,6 @@ def generate_launch_description():
                     "planner_server",
                     "behavior_server",
                     "bt_navigator",
-                    "collision_monitor",
                 ],
             }
         ],
@@ -173,11 +186,12 @@ def generate_launch_description():
         period=5.0,
         actions=[
             controller_server,
+            velocity_command_mux,
             velocity_smoother,
             planner_server,
             behavior_server,
             bt_navigator,
-            collision_monitor,
+            directional_safety_filter,
             navigation_manager,
         ],
     )

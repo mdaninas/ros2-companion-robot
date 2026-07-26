@@ -1,0 +1,10 @@
+velocity_command_mux:
+  ros__parameters:
+    navigation_topic: /cmd_vel_nav_raw
+    behavior_topic: /cmd_vel_behavior_raw
+    behavior_active_topic: /cmd_vel_behavior_active
+    output_topic: /cmd_vel_selected
+    update_rate: 25.0
+    command_timeout: 0.50
+    behavior_active_timeout: 0.50
+    behavior_release_delay: 0.20

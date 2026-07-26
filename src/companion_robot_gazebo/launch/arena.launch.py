@@ -82,10 +82,15 @@ def generate_launch_description():
             "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
             # ROS -> Gazebo velocity commands.
             "/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist",
-            # ROS -> Gazebo velocity for the pedestrian's physical slide joint.
+            # ROS -> Gazebo velocity for the pedestrian's physical X/Y joints.
             (
                 "/model/moving_pedestrian/joint/"
-                "pedestrian_slide_joint/cmd_vel"
+                "pedestrian_x_joint/cmd_vel"
+                "@std_msgs/msg/Float64]gz.msgs.Double"
+            ),
+            (
+                "/model/moving_pedestrian/joint/"
+                "pedestrian_y_joint/cmd_vel"
                 "@std_msgs/msg/Float64]gz.msgs.Double"
             ),
             # Gazebo -> ROS stable pose odometry, wheel odometry, and TF.
@@ -97,6 +102,8 @@ def generate_launch_description():
             # Gazebo -> ROS rear docking camera and calibration.
             "/rear_camera@sensor_msgs/msg/Image[gz.msgs.Image",
             "/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo",
+            # Gazebo -> ROS front person-detection camera.
+            "/front_camera@sensor_msgs/msg/Image[gz.msgs.Image",
             # Gazebo -> ROS wheel joint positions.
             (
                 "/world/companion_arena/model/companion_robot/joint_state"
@@ -106,6 +113,7 @@ def generate_launch_description():
         remappings=[
             ("/rear_camera", "/rear_camera/image_raw"),
             ("/camera_info", "/rear_camera/camera_info"),
+            ("/front_camera", "/front_camera/image_raw"),
             (
                 "/world/companion_arena/model/companion_robot/joint_state",
                 "/joint_states",
@@ -175,7 +183,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "moving_obstacle",
                 default_value="true",
-                description="Move the pedestrian dummy across the patrol route.",
+                description="Move the pedestrian around its varied route.",
             ),
             DeclareLaunchArgument(
                 "moving_obstacle_params",
