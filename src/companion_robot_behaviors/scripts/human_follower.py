@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Follow a camera-and-LiDAR person track by continuously updating Nav2."""
+"""Predict and socially follow a camera-and-LiDAR person track with Nav2."""
 
 import json
 import math
@@ -8,7 +8,7 @@ import time
 
 import rclpy
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import Point, PoseStamped, Twist
+from geometry_msgs.msg import Point, PoseStamped, Twist, TwistStamped
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
@@ -16,7 +16,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
@@ -86,6 +86,24 @@ class HumanFollower(Node):
         self.declare_parameter("search_yaw_tolerance", 0.10)
         self.declare_parameter("reacquire_pause_duration", 3.0)
         self.declare_parameter("reacquire_sweep_duration", 24.0)
+        self.declare_parameter("predictive_following_enabled", True)
+        self.declare_parameter("velocity_filter_alpha", 0.28)
+        self.declare_parameter("velocity_minimum_sample_dt", 0.08)
+        self.declare_parameter("velocity_reset_timeout", 1.20)
+        self.declare_parameter("maximum_person_speed", 0.65)
+        self.declare_parameter("minimum_prediction_speed", 0.06)
+        self.declare_parameter("prediction_horizon", 0.85)
+        self.declare_parameter("lost_target_prediction_horizon", 1.40)
+        self.declare_parameter("maximum_prediction_distance", 0.35)
+        self.declare_parameter("motion_samples_for_confidence", 4)
+        self.declare_parameter("motion_trailing_weight", 0.75)
+        self.declare_parameter("adaptive_distance_speed_gain", 0.60)
+        self.declare_parameter("maximum_follow_distance", 0.90)
+        self.declare_parameter("social_yield_enabled", True)
+        self.declare_parameter("social_yield_distance", 1.10)
+        self.declare_parameter("social_yield_release_distance", 1.30)
+        self.declare_parameter("social_yield_closing_speed", 0.08)
+        self.declare_parameter("social_yield_release_speed", 0.03)
         self.declare_parameter("goal_update_interval", 1.0)
         self.declare_parameter("goal_update_distance", 0.20)
         self.declare_parameter("goal_update_yaw", 0.15)
@@ -210,6 +228,98 @@ class HumanFollower(Node):
             minimum_full_sweep_duration,
             float(self.get_parameter("reacquire_sweep_duration").value),
         )
+        self.predictive_following_enabled = bool(
+            self.get_parameter("predictive_following_enabled").value
+        )
+        self.velocity_filter_alpha = clamp(
+            float(self.get_parameter("velocity_filter_alpha").value),
+            0.05,
+            1.0,
+        )
+        self.velocity_minimum_sample_dt = max(
+            0.02,
+            float(
+                self.get_parameter("velocity_minimum_sample_dt").value
+            ),
+        )
+        self.velocity_reset_timeout = max(
+            self.velocity_minimum_sample_dt * 2.0,
+            float(self.get_parameter("velocity_reset_timeout").value),
+        )
+        self.maximum_person_speed = max(
+            0.10, float(self.get_parameter("maximum_person_speed").value)
+        )
+        self.minimum_prediction_speed = clamp(
+            float(self.get_parameter("minimum_prediction_speed").value),
+            0.01,
+            self.maximum_person_speed,
+        )
+        self.prediction_horizon = clamp(
+            float(self.get_parameter("prediction_horizon").value),
+            0.0,
+            2.0,
+        )
+        self.lost_target_prediction_horizon = clamp(
+            float(
+                self.get_parameter("lost_target_prediction_horizon").value
+            ),
+            0.0,
+            3.0,
+        )
+        self.maximum_prediction_distance = clamp(
+            float(
+                self.get_parameter("maximum_prediction_distance").value
+            ),
+            0.0,
+            1.0,
+        )
+        self.motion_samples_for_confidence = max(
+            1,
+            int(
+                self.get_parameter("motion_samples_for_confidence").value
+            ),
+        )
+        self.motion_trailing_weight = clamp(
+            float(self.get_parameter("motion_trailing_weight").value),
+            0.0,
+            1.0,
+        )
+        self.adaptive_distance_speed_gain = max(
+            0.0,
+            float(
+                self.get_parameter("adaptive_distance_speed_gain").value
+            ),
+        )
+        self.maximum_follow_distance = max(
+            self.follow_distance,
+            float(self.get_parameter("maximum_follow_distance").value),
+        )
+        self.social_yield_enabled = bool(
+            self.get_parameter("social_yield_enabled").value
+        )
+        self.social_yield_distance = max(
+            self.minimum_distance,
+            float(self.get_parameter("social_yield_distance").value),
+        )
+        self.social_yield_release_distance = max(
+            self.social_yield_distance + 0.05,
+            float(
+                self.get_parameter("social_yield_release_distance").value
+            ),
+        )
+        self.social_yield_closing_speed = max(
+            0.02,
+            float(
+                self.get_parameter("social_yield_closing_speed").value
+            ),
+        )
+        self.social_yield_release_speed = clamp(
+            float(
+                self.get_parameter("social_yield_release_speed").value
+            ),
+            0.0,
+            self.social_yield_closing_speed,
+        )
         self.goal_update_interval = max(
             0.3, float(self.get_parameter("goal_update_interval").value)
         )
@@ -243,6 +353,15 @@ class HumanFollower(Node):
         )
         self.visualization_publisher = self.create_publisher(
             MarkerArray, "/human_following/visualization", latched_qos
+        )
+        self.predicted_target_publisher = self.create_publisher(
+            PoseStamped, "/human_following/predicted_target", 10
+        )
+        self.target_velocity_publisher = self.create_publisher(
+            TwistStamped, "/human_following/target_velocity", 10
+        )
+        self.effective_distance_publisher = self.create_publisher(
+            Float32, "/human_following/effective_distance", 10
         )
         self.direct_command_publisher = self.create_publisher(
             Twist, self.direct_command_topic, 10
@@ -299,6 +418,20 @@ class HumanFollower(Node):
         self.last_target_distance = None
         self.last_target_bearing = None
         self.last_target_map = None
+        self.predicted_target_map = None
+        self.effective_follow_distance = self.follow_distance
+        self.target_velocity_map = (0.0, 0.0)
+        self.target_speed = 0.0
+        self.motion_confidence = 0.0
+        self.motion_sample_count = 0
+        self.last_motion_sample_map = None
+        self.last_motion_sample_time = None
+        self.last_motion_sample_at = None
+        self.target_pose_sequence = 0
+        self.processed_target_pose_sequence = -1
+        self.closing_speed = 0.0
+        self.social_yield_active = False
+        self.social_mode = "STATIONARY"
         self.last_goal = None
         self.last_goal_mode = None
         self.last_goal_sent_at = 0.0
@@ -343,6 +476,7 @@ class HumanFollower(Node):
             return
         self.last_target_pose = pose
         self.last_target_at = time.monotonic()
+        self.target_pose_sequence += 1
         self.target_visible = True
         self.last_target_distance = math.hypot(
             pose.pose.position.x, pose.pose.position.y
@@ -365,6 +499,7 @@ class HumanFollower(Node):
         self.last_target_distance = None
         self.last_target_bearing = None
         self.last_target_map = None
+        self._reset_motion_estimate()
         self.search_started_at = None
         self.search_phase = "NONE"
         self._cancel_active_goal("person identity changed")
@@ -379,7 +514,9 @@ class HumanFollower(Node):
     def _handle_start(self, _request, response):
         self.enabled = True
         self.retreat_active = False
+        self.social_yield_active = False
         self._reset_retreat_recovery()
+        self._reset_motion_estimate()
         self.last_goal = None
         self.last_goal_mode = None
         self.goal_failures = 0
@@ -394,7 +531,9 @@ class HumanFollower(Node):
     def _handle_stop(self, _request, response):
         self.enabled = False
         self.retreat_active = False
+        self.social_yield_active = False
         self._reset_retreat_recovery()
+        self._reset_motion_estimate()
         self._stop_direct_control()
         self._cancel_active_goal("following stopped")
         self.last_goal = None
@@ -423,9 +562,18 @@ class HumanFollower(Node):
             "target_distance": self.last_target_distance,
             "target_bearing": self.last_target_bearing,
             "follow_distance": self.follow_distance,
+            "effective_follow_distance": self.effective_follow_distance,
             "minimum_distance": self.minimum_distance,
             "retreat_release_distance": self.retreat_release_distance,
             "retreat_active": self.retreat_active,
+            "predictive_following_enabled": self.predictive_following_enabled,
+            "target_velocity_map": self.target_velocity_map,
+            "target_speed": self.target_speed,
+            "motion_confidence": self.motion_confidence,
+            "predicted_target_map": self.predicted_target_map,
+            "closing_speed": self.closing_speed,
+            "social_mode": self.social_mode,
+            "social_yield_active": self.social_yield_active,
             "safety_status": self.safety_status,
             "retreat_escape_active": (
                 time.monotonic() < self.retreat_escape_until
@@ -490,9 +638,14 @@ class HumanFollower(Node):
         target_x = robot_x + cosine * local_x - sine * local_y
         target_y = robot_y + sine * local_x + cosine * local_y
         self.last_target_map = (target_x, target_y)
+        robot = (robot_x, robot_y)
+        target = self.last_target_map
 
-        unit_x = (target_x - robot_x) / max(target_distance, 1e-6)
-        unit_y = (target_y - robot_y) / max(target_distance, 1e-6)
+        self._update_motion_estimate(target, now)
+        self.predicted_target_map = self._predict_target(target)
+        self.effective_follow_distance = self._adaptive_follow_distance()
+        self.closing_speed = self._person_closing_speed(robot, target)
+        self._publish_motion_diagnostics()
 
         if target_distance < self.minimum_distance:
             self.retreat_active = True
@@ -504,6 +657,8 @@ class HumanFollower(Node):
             self._reset_retreat_recovery()
 
         if self.retreat_active:
+            self.social_yield_active = False
+            self.social_mode = "PERSONAL_SPACE_RETREAT"
             self._cancel_active_goal("direct person-aware retreat")
             self.last_goal = None
             self.last_goal_mode = None
@@ -515,20 +670,45 @@ class HumanFollower(Node):
                 self._publish_retreat_command(target_bearing)
                 retreat_status = "RETREATING"
             self._publish_visualization(
-                (robot_x, robot_y), self.last_target_map, None
+                robot,
+                target,
+                None,
+                self.predicted_target_map,
+                self.target_velocity_map,
             )
             self._set_status(retreat_status)
             return
 
         self._reset_retreat_recovery()
 
+        if self._should_socially_yield(target_distance):
+            self.social_mode = "YIELDING_TO_APPROACHING_PERSON"
+            self._cancel_active_goal("yielding to approaching person")
+            self.last_goal = None
+            self.last_goal_mode = None
+            self.goal_failures = 0
+            if abs(target_bearing) > self.face_yaw_tolerance:
+                self._publish_facing_command(target_bearing)
+            else:
+                self._stop_direct_control()
+            self._set_status("SOCIAL_YIELDING")
+            self._publish_visualization(
+                robot,
+                target,
+                None,
+                self.predicted_target_map,
+                self.target_velocity_map,
+            )
+            return
+
         yaw_limit = (
             self.face_yaw_tolerance
             if target_distance
-            <= self.follow_distance + self.distance_tolerance
+            <= self.effective_follow_distance + self.distance_tolerance
             else self.face_before_follow_yaw
         )
         if abs(target_bearing) > yaw_limit:
+            self.social_mode = "FACING_SELECTED_PERSON"
             self._cancel_active_goal("turning front camera toward person")
             self.last_goal = None
             self.last_goal_mode = None
@@ -536,11 +716,23 @@ class HumanFollower(Node):
             self._publish_facing_command(target_bearing)
             self._set_status("TURNING_TO_PERSON")
             self._publish_visualization(
-                (robot_x, robot_y), self.last_target_map, None
+                robot,
+                target,
+                None,
+                self.predicted_target_map,
+                self.target_velocity_map,
             )
             return
 
-        if target_distance <= self.follow_distance + self.distance_tolerance:
+        if (
+            target_distance
+            <= self.effective_follow_distance + self.distance_tolerance
+        ):
+            self.social_mode = (
+                "ADAPTIVE_DISTANCE_HOLD"
+                if self._motion_is_reliable()
+                else "STATIONARY_DISTANCE_HOLD"
+            )
             self._stop_direct_control()
             self._cancel_active_goal("safe following distance reached")
             self.last_goal = None
@@ -548,31 +740,334 @@ class HumanFollower(Node):
             self.goal_failures = 0
             self._set_status("HOLDING_DISTANCE")
             self._publish_visualization(
-                (robot_x, robot_y), self.last_target_map, None
+                robot,
+                target,
+                None,
+                self.predicted_target_map,
+                self.target_velocity_map,
             )
             return
 
-        goal_travel = target_distance - self.follow_distance
-        if goal_travel <= self.minimum_goal_displacement:
+        goal, goal_mode = self._social_follow_goal(robot, target)
+        goal_displacement = math.hypot(
+            goal[0] - robot_x, goal[1] - robot_y
+        )
+        if goal_displacement <= self.minimum_goal_displacement:
+            self.social_mode = "GOAL_DEADBAND_HOLD"
             self._stop_direct_control()
             self._cancel_active_goal("goal displacement is negligible")
             self._set_status("HOLDING_DISTANCE")
             return
-        goal_x = target_x - unit_x * self.follow_distance
-        goal_y = target_y - unit_y * self.follow_distance
-        goal_yaw = math.atan2(target_y - goal_y, target_x - goal_x)
-        goal = (goal_x, goal_y, goal_yaw)
+        self.social_mode = goal_mode
         self._stop_direct_control()
         self._publish_visualization(
-            (robot_x, robot_y), self.last_target_map, goal
+            robot,
+            target,
+            goal,
+            self.predicted_target_map,
+            self.target_velocity_map,
         )
 
-        self._update_navigation_goal(goal, "FOLLOW")
-        self._set_status("FOLLOWING")
+        self._update_navigation_goal(goal, goal_mode)
+        self._set_status(
+            "PREDICTIVE_FOLLOWING"
+            if goal_mode == "PREDICTIVE_TRAILING"
+            else "FOLLOWING"
+        )
+
+    def _reset_motion_estimate(self):
+        self.predicted_target_map = None
+        self.effective_follow_distance = self.follow_distance
+        self.target_velocity_map = (0.0, 0.0)
+        self.target_speed = 0.0
+        self.motion_confidence = 0.0
+        self.motion_sample_count = 0
+        self.last_motion_sample_map = None
+        self.last_motion_sample_time = None
+        self.last_motion_sample_at = None
+        self.processed_target_pose_sequence = self.target_pose_sequence
+        self.closing_speed = 0.0
+        self.social_yield_active = False
+        self.social_mode = "STATIONARY"
+
+    def _update_motion_estimate(self, target, now):
+        if (
+            self.target_pose_sequence
+            == self.processed_target_pose_sequence
+        ):
+            return
+
+        self.processed_target_pose_sequence = self.target_pose_sequence
+        sample_time = (
+            now if self.last_target_at is None else self.last_target_at
+        )
+        if (
+            self.last_motion_sample_map is None
+            or self.last_motion_sample_time is None
+        ):
+            self.last_motion_sample_map = target
+            self.last_motion_sample_time = sample_time
+            self.last_motion_sample_at = now
+            return
+
+        sample_dt = sample_time - self.last_motion_sample_time
+        if sample_dt < self.velocity_minimum_sample_dt:
+            return
+        if sample_dt > self.velocity_reset_timeout:
+            self.target_velocity_map = (0.0, 0.0)
+            self.target_speed = 0.0
+            self.motion_confidence = 0.0
+            self.motion_sample_count = 0
+            self.last_motion_sample_map = target
+            self.last_motion_sample_time = sample_time
+            self.last_motion_sample_at = now
+            return
+
+        raw_velocity_x = (
+            target[0] - self.last_motion_sample_map[0]
+        ) / sample_dt
+        raw_velocity_y = (
+            target[1] - self.last_motion_sample_map[1]
+        ) / sample_dt
+        raw_speed = math.hypot(raw_velocity_x, raw_velocity_y)
+
+        # A large one-frame jump usually means a noisy detection or a
+        # temporary track mismatch. Do not let it pull the prediction away.
+        if raw_speed > self.maximum_person_speed * 2.0:
+            self.motion_sample_count = max(
+                0, self.motion_sample_count - 1
+            )
+            self.motion_confidence = min(
+                1.0,
+                self.motion_sample_count
+                / self.motion_samples_for_confidence,
+            )
+            self.last_motion_sample_map = target
+            self.last_motion_sample_time = sample_time
+            return
+
+        if raw_speed > self.maximum_person_speed:
+            scale = self.maximum_person_speed / raw_speed
+            raw_velocity_x *= scale
+            raw_velocity_y *= scale
+
+        previous_x, previous_y = self.target_velocity_map
+        alpha = self.velocity_filter_alpha
+        filtered_x = (
+            alpha * raw_velocity_x + (1.0 - alpha) * previous_x
+        )
+        filtered_y = (
+            alpha * raw_velocity_y + (1.0 - alpha) * previous_y
+        )
+        filtered_speed = math.hypot(filtered_x, filtered_y)
+        if filtered_speed > self.maximum_person_speed:
+            scale = self.maximum_person_speed / filtered_speed
+            filtered_x *= scale
+            filtered_y *= scale
+            filtered_speed = self.maximum_person_speed
+
+        self.target_velocity_map = (filtered_x, filtered_y)
+        self.target_speed = filtered_speed
+        self.motion_sample_count += 1
+        self.motion_confidence = min(
+            1.0,
+            self.motion_sample_count / self.motion_samples_for_confidence,
+        )
+        self.last_motion_sample_map = target
+        self.last_motion_sample_time = sample_time
+        self.last_motion_sample_at = now
+
+    def _motion_is_reliable(self):
+        if not self.predictive_following_enabled:
+            return False
+        if self.last_motion_sample_at is None:
+            return False
+        return (
+            self.motion_confidence >= 0.50
+            and self.target_speed >= self.minimum_prediction_speed
+            and time.monotonic() - self.last_motion_sample_at
+            <= self.velocity_reset_timeout
+        )
+
+    def _limited_prediction(self, target, horizon):
+        prediction_x = (
+            self.target_velocity_map[0]
+            * horizon
+            * self.motion_confidence
+        )
+        prediction_y = (
+            self.target_velocity_map[1]
+            * horizon
+            * self.motion_confidence
+        )
+        prediction_distance = math.hypot(prediction_x, prediction_y)
+        if prediction_distance > self.maximum_prediction_distance:
+            scale = (
+                self.maximum_prediction_distance / prediction_distance
+            )
+            prediction_x *= scale
+            prediction_y *= scale
+        return (target[0] + prediction_x, target[1] + prediction_y)
+
+    def _predict_target(self, target):
+        if not self._motion_is_reliable():
+            return target
+        return self._limited_prediction(target, self.prediction_horizon)
+
+    def _adaptive_follow_distance(self):
+        if not self._motion_is_reliable():
+            return self.follow_distance
+        requested = self.follow_distance + (
+            self.adaptive_distance_speed_gain
+            * self.target_speed
+            * self.motion_confidence
+        )
+        return clamp(
+            requested,
+            self.follow_distance,
+            self.maximum_follow_distance,
+        )
+
+    def _person_closing_speed(self, robot, target):
+        if not self._motion_is_reliable():
+            return 0.0
+        target_to_robot_x = robot[0] - target[0]
+        target_to_robot_y = robot[1] - target[1]
+        separation = math.hypot(target_to_robot_x, target_to_robot_y)
+        if separation <= 1e-6:
+            return 0.0
+        return (
+            self.target_velocity_map[0] * target_to_robot_x
+            + self.target_velocity_map[1] * target_to_robot_y
+        ) / separation
+
+    def _should_socially_yield(self, target_distance):
+        if not self.social_yield_enabled:
+            self.social_yield_active = False
+            return False
+
+        if self.social_yield_active:
+            if (
+                target_distance >= self.social_yield_release_distance
+                or self.closing_speed <= self.social_yield_release_speed
+            ):
+                self.social_yield_active = False
+            return self.social_yield_active
+
+        self.social_yield_active = (
+            self._motion_is_reliable()
+            and target_distance <= self.social_yield_distance
+            and self.closing_speed >= self.social_yield_closing_speed
+        )
+        return self.social_yield_active
+
+    def _social_follow_goal(self, robot, target):
+        robot_to_target_x = target[0] - robot[0]
+        robot_to_target_y = target[1] - robot[1]
+        separation = max(
+            math.hypot(robot_to_target_x, robot_to_target_y), 1e-6
+        )
+        direct_x = robot_to_target_x / separation
+        direct_y = robot_to_target_y / separation
+        anchor = self.predicted_target_map or target
+        direction_x = direct_x
+        direction_y = direct_y
+        mode = "DIRECT_FOLLOW"
+
+        if self._motion_is_reliable():
+            motion_x = self.target_velocity_map[0] / self.target_speed
+            motion_y = self.target_velocity_map[1] / self.target_speed
+            speed_span = max(
+                0.08,
+                0.25 - self.minimum_prediction_speed,
+            )
+            speed_weight = clamp(
+                (
+                    self.target_speed
+                    - self.minimum_prediction_speed
+                )
+                / speed_span,
+                0.0,
+                1.0,
+            )
+            trailing_weight = (
+                self.motion_trailing_weight
+                * self.motion_confidence
+                * speed_weight
+            )
+            blended_x = (
+                (1.0 - trailing_weight) * direct_x
+                + trailing_weight * motion_x
+            )
+            blended_y = (
+                (1.0 - trailing_weight) * direct_y
+                + trailing_weight * motion_y
+            )
+            blended_length = math.hypot(blended_x, blended_y)
+            if blended_length > 1e-6:
+                direction_x = blended_x / blended_length
+                direction_y = blended_y / blended_length
+            if trailing_weight >= 0.15:
+                mode = "PREDICTIVE_TRAILING"
+
+        goal_x = (
+            anchor[0] - direction_x * self.effective_follow_distance
+        )
+        goal_y = (
+            anchor[1] - direction_y * self.effective_follow_distance
+        )
+        goal_yaw = math.atan2(
+            target[1] - goal_y, target[0] - goal_x
+        )
+        return (goal_x, goal_y, goal_yaw), mode
+
+    def _publish_motion_diagnostics(self):
+        stamp = self.get_clock().now().to_msg()
+
+        predicted = PoseStamped()
+        predicted.header.frame_id = self.map_frame
+        predicted.header.stamp = stamp
+        if self.predicted_target_map is not None:
+            predicted.pose.position.x = self.predicted_target_map[0]
+            predicted.pose.position.y = self.predicted_target_map[1]
+        predicted.pose.orientation.w = 1.0
+        self.predicted_target_publisher.publish(predicted)
+
+        velocity = TwistStamped()
+        velocity.header.frame_id = self.map_frame
+        velocity.header.stamp = stamp
+        velocity.twist.linear.x = self.target_velocity_map[0]
+        velocity.twist.linear.y = self.target_velocity_map[1]
+        self.target_velocity_publisher.publish(velocity)
+
+        effective_distance = Float32()
+        effective_distance.data = float(self.effective_follow_distance)
+        self.effective_distance_publisher.publish(effective_distance)
+
+    def _lost_target_search_point(self, now):
+        if self.last_target_map is None:
+            return None
+        if (
+            not self.predictive_following_enabled
+            or self.motion_confidence < 0.50
+            or self.target_speed < self.minimum_prediction_speed
+            or self.last_target_at is None
+        ):
+            return self.last_target_map
+        unseen_duration = min(
+            max(0.0, now - self.last_target_at),
+            self.lost_target_prediction_horizon,
+        )
+        return self._limited_prediction(
+            self.last_target_map, unseen_duration
+        )
 
     def _handle_target_loss(self, now):
         self.target_visible = False
         self.retreat_active = False
+        self.social_yield_active = False
+        self.closing_speed = 0.0
+        self.social_mode = "LOST_TARGET_PREDICTION"
         self._reset_retreat_recovery()
         self._cancel_active_goal("selected person target lost")
         self.last_goal = None
@@ -590,13 +1085,20 @@ class HumanFollower(Node):
             self._publish_visualization(None, None, None)
             return
 
+        search_target = self._lost_target_search_point(now)
+        self.predicted_target_map = search_target
+
         if elapsed > self.target_search_timeout:
             self._run_periodic_reacquisition(
                 elapsed - self.target_search_timeout,
                 sweep_first=False,
             )
             self._publish_visualization(
-                None, self.last_target_map, None
+                None,
+                self.last_target_map,
+                None,
+                search_target,
+                self.target_velocity_map,
             )
             return
 
@@ -610,10 +1112,10 @@ class HumanFollower(Node):
                 transform.transform.rotation
             )
             robot = (robot_x, robot_y)
-            if self.last_target_map is not None:
+            if search_target is not None:
                 target_heading = math.atan2(
-                    self.last_target_map[1] - robot_y,
-                    self.last_target_map[0] - robot_x,
+                    search_target[1] - robot_y,
+                    search_target[0] - robot_x,
                 )
                 last_seen_error = angle_difference(
                     target_heading, robot_yaw
@@ -658,7 +1160,11 @@ class HumanFollower(Node):
             self._set_status("SEARCHING_SWEEP")
 
         self._publish_visualization(
-            robot, self.last_target_map, None
+            robot,
+            self.last_target_map,
+            None,
+            search_target,
+            self.target_velocity_map,
         )
 
     def _run_periodic_reacquisition(self, elapsed, sweep_first):
@@ -922,7 +1428,14 @@ class HumanFollower(Node):
             handle.cancel_goal_async()
         self.get_logger().info(f"Canceling Nav2 goal: {reason}.")
 
-    def _publish_visualization(self, robot, target, goal):
+    def _publish_visualization(
+        self,
+        robot,
+        target,
+        goal,
+        predicted=None,
+        velocity=None,
+    ):
         clear = Marker()
         clear.action = Marker.DELETEALL
         markers = [clear]
@@ -948,6 +1461,81 @@ class HumanFollower(Node):
             target_marker.color.b = 1.0
             target_marker.color.a = 0.75
             markers.append(target_marker)
+
+            personal_space = Marker()
+            personal_space.header.frame_id = self.map_frame
+            personal_space.header.stamp = stamp
+            personal_space.ns = "human_following_social_space"
+            personal_space.id = 0
+            personal_space.type = Marker.CYLINDER
+            personal_space.action = Marker.ADD
+            personal_space.pose.position.x = target[0]
+            personal_space.pose.position.y = target[1]
+            personal_space.pose.position.z = 0.015
+            personal_space.pose.orientation.w = 1.0
+            personal_space.scale.x = (
+                2.0 * self.effective_follow_distance
+            )
+            personal_space.scale.y = (
+                2.0 * self.effective_follow_distance
+            )
+            personal_space.scale.z = 0.03
+            personal_space.color.r = 1.0
+            personal_space.color.g = 0.75
+            personal_space.color.b = 0.05
+            personal_space.color.a = 0.10
+            markers.append(personal_space)
+
+        if predicted is not None:
+            predicted_marker = Marker()
+            predicted_marker.header.frame_id = self.map_frame
+            predicted_marker.header.stamp = stamp
+            predicted_marker.ns = "human_following_prediction"
+            predicted_marker.id = 0
+            predicted_marker.type = Marker.SPHERE
+            predicted_marker.action = Marker.ADD
+            predicted_marker.pose.position.x = predicted[0]
+            predicted_marker.pose.position.y = predicted[1]
+            predicted_marker.pose.position.z = 0.12
+            predicted_marker.pose.orientation.w = 1.0
+            predicted_marker.scale.x = 0.14
+            predicted_marker.scale.y = 0.14
+            predicted_marker.scale.z = 0.14
+            predicted_marker.color.r = 0.10
+            predicted_marker.color.g = 1.0
+            predicted_marker.color.b = 0.45
+            predicted_marker.color.a = 0.95
+            markers.append(predicted_marker)
+
+        if (
+            target is not None
+            and velocity is not None
+            and self._motion_is_reliable()
+        ):
+            velocity_arrow = Marker()
+            velocity_arrow.header.frame_id = self.map_frame
+            velocity_arrow.header.stamp = stamp
+            velocity_arrow.ns = "human_following_velocity"
+            velocity_arrow.id = 0
+            velocity_arrow.type = Marker.ARROW
+            velocity_arrow.action = Marker.ADD
+            velocity_arrow.scale.x = 0.045
+            velocity_arrow.scale.y = 0.085
+            velocity_arrow.scale.z = 0.10
+            velocity_arrow.color.r = 0.05
+            velocity_arrow.color.g = 0.95
+            velocity_arrow.color.b = 0.35
+            velocity_arrow.color.a = 0.95
+            arrow_start = Point()
+            arrow_start.x = target[0]
+            arrow_start.y = target[1]
+            arrow_start.z = 0.18
+            arrow_end = Point()
+            arrow_end.x = target[0] + velocity[0] * 1.5
+            arrow_end.y = target[1] + velocity[1] * 1.5
+            arrow_end.z = 0.18
+            velocity_arrow.points = [arrow_start, arrow_end]
+            markers.append(velocity_arrow)
 
         if goal is not None:
             goal_marker = Marker()
@@ -993,6 +1581,33 @@ class HumanFollower(Node):
             target_point.z = 0.08
             line.points = [robot_point, target_point]
             markers.append(line)
+
+        if target is not None:
+            status_text = Marker()
+            status_text.header.frame_id = self.map_frame
+            status_text.header.stamp = stamp
+            status_text.ns = "human_following_social_status"
+            status_text.id = 0
+            status_text.type = Marker.TEXT_VIEW_FACING
+            status_text.action = Marker.ADD
+            status_text.pose.position.x = (
+                predicted[0] if predicted is not None else target[0]
+            )
+            status_text.pose.position.y = (
+                predicted[1] if predicted is not None else target[1]
+            )
+            status_text.pose.position.z = 1.20
+            status_text.pose.orientation.w = 1.0
+            status_text.scale.z = 0.16
+            status_text.color.r = 0.95
+            status_text.color.g = 0.95
+            status_text.color.b = 1.0
+            status_text.color.a = 0.95
+            status_text.text = (
+                f"{self.social_mode} | {self.target_speed:.2f} m/s | "
+                f"gap {self.effective_follow_distance:.2f} m"
+            )
+            markers.append(status_text)
 
         self.visualization_publisher.publish(MarkerArray(markers=markers))
 

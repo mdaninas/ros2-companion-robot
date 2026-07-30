@@ -7,7 +7,8 @@ SLAM, and a saved occupancy map.
 
 The current milestone is robust autonomous localization, navigation, waypoint
 patrol, energy-aware docking, mission-level recovery, multi-person identity
-tracking, safe human following, and live RViz diagnostics with Nav2.
+tracking, predictive social human following, and live RViz diagnostics with
+Nav2.
 
 ## Features
 
@@ -40,8 +41,9 @@ tracking, safe human following, and live RViz diagnostics with Nav2.
 - Costmap clearing before patrol replanning
 - Live autonomy health, patrol route, costmaps, and sensor status in RViz
 - Camera-and-LiDAR person detection using rendered sensor data
-- Identity-locked human following with a hard minimum distance, continuous
-  front-camera alignment, safe retreat, and periodic lost-target reacquisition
+- Identity-locked predictive human following with map-frame motion estimation
+- Adaptive social distance, path-aware trailing, approach yielding, continuous
+  front-camera alignment, safe retreat, and lost-target motion prediction
 
 ## Current Status
 
@@ -68,7 +70,8 @@ tracking, safe human following, and live RViz diagnostics with Nav2.
 | Mission state and autonomous recovery | Validated in simulation |
 | Autonomy diagnostics and RViz health overlay | Complete |
 | Front-camera person detection | Validated in simulation |
-| Human following and safe distance control | Validated in simulation |
+| Predictive human following and safe distance control | Implemented; manual validation pending |
+| Adaptive distance and social approach yielding | Implemented; manual validation pending |
 | Multi-person identity selection and lost-target recovery | Validated in simulation |
 | Physical robot deployment | Planned |
 
@@ -542,21 +545,35 @@ target poses; the behavior does not read either person's ground-truth Gazebo
 pose. Selecting one identity locks the follower to that person even when the
 two routes cross.
 
-The robot follows at a configured 0.70 metre surface distance and treats 0.58
-metres as a hard minimum. A retreat remains active until 0.66 metres so sensor
-noise cannot immediately cancel it. During retreat, a direct bounded controller
+The robot follows at a base 0.70 metre surface distance and treats 0.58 metres
+as a hard minimum. A retreat remains active until 0.66 metres so sensor noise
+cannot immediately cancel it. During retreat, a direct bounded controller
 reverses while steering the fixed front camera toward the person instead of
 letting the global planner choose the turn direction. The robot holds that
 heading while nearby. An exclusive command mux prevents Nav2 from overwriting
 direct facing or retreat commands. The selected command still passes through
 velocity smoothing and direction-aware collision protection.
+
+The follower estimates the selected person's filtered velocity in the `map`
+frame. This avoids treating the robot's own translation or rotation as human
+motion. After four consistent samples, it predicts a bounded future target,
+blends the following goal toward the person's direction of travel, and trails
+behind that direction rather than cutting across the person's path. Faster
+motion increases the requested gap gradually from 0.70 up to 0.90 metres.
+Prediction is disabled automatically while the estimate is immature, stale,
+or implausibly fast.
+
+When the selected person walks toward the robot within the social-yield zone,
+the robot cancels translation and keeps its front camera facing the person.
+The hard minimum-distance retreat still has priority if the person continues
+approaching. Hysteresis prevents rapid switching at the yield boundary.
 If the selected target leaves the front camera, the current goal is cancelled.
-The robot first faces the last known map position, then performs a bounded
-left/right sweep. It resumes only when the same selected identity is detected
-again. After 15 seconds without reacquisition it briefly enters `TARGET_LOST`,
-then periodically performs a complete sweep. This keeps the robot stationary
-between attempts without permanently giving up or switching to the other
-person.
+The robot first faces the person's bounded motion-predicted position, then
+performs a bounded left/right sweep. It resumes only when the same selected
+identity is detected again. After 15 seconds without reacquisition it briefly
+enters `TARGET_LOST`, then periodically performs a complete sweep. This keeps
+the robot stationary between attempts without permanently giving up or
+switching to the other person.
 
 Inspect the current state from a second sourced terminal:
 
@@ -564,11 +581,14 @@ Inspect the current state from a second sourced terminal:
 ros2 service call /get_human_following_status std_srvs/srv/Trigger "{}"
 ```
 
-Expected runtime states are `SEARCHING`, `FOLLOWING`, `HOLDING_DISTANCE`,
-`TURNING_TO_PERSON`, `RETREATING`, `SEARCHING_LAST_SEEN`,
-`SEARCHING_SWEEP`, `SEARCHING_REACQUIRE`, and `TARGET_LOST`. The returned JSON
-includes `selected_identity`, `target_visible`, `target_distance`,
-`search_phase`, and the last known map position.
+Expected runtime states are `SEARCHING`, `FOLLOWING`,
+`PREDICTIVE_FOLLOWING`, `HOLDING_DISTANCE`, `SOCIAL_YIELDING`,
+`TURNING_TO_PERSON`, `RETREATING`, `SEARCHING_LAST_SEEN`, `SEARCHING_SWEEP`,
+`SEARCHING_REACQUIRE`, and `TARGET_LOST`. The returned JSON includes
+`selected_identity`, `target_visible`, `target_distance`, `target_speed`,
+`motion_confidence`, `predicted_target_map`, `effective_follow_distance`,
+`closing_speed`, `social_mode`, `search_phase`, and the last known map
+position.
 
 List both tracks and see which identity is selected:
 
@@ -609,7 +629,10 @@ ros2 service call /start_human_following std_srvs/srv/Trigger "{}"
 ```
 
 RViz displays all fresh identity tracks, highlights the selected one, and
-shows the current following goal. Enable the disabled
+shows the current following goal. The purple cylinder is the measured person,
+the green sphere is the predicted position, the green arrow is estimated
+motion, the orange sphere is the Nav2 goal, and the translucent yellow circle
+is the current social-distance radius. Enable the disabled
 `/person_detection/debug_image` Image display to inspect labelled camera
 boxes and fused ranges.
 
@@ -633,13 +656,28 @@ After one cycle from the default selection, `selected_identity` should be
 `person_beta`, the blue person. Verify all of the following:
 
 - The robot turns its front camera toward the selected person.
-- It approaches and holds approximately 0.70 metres from the visible surface.
+- A moving person produces a short stable green velocity arrow and a green
+  predicted point slightly ahead, never more than 0.35 metres away.
+- The status changes to `PREDICTIVE_FOLLOWING` after motion becomes reliable.
+- The orange Nav2 goal trails the direction of travel instead of cutting
+  directly across the person's route.
+- It holds approximately 0.70 metres from a stationary person and may
+  gradually increase the gap up to 0.90 metres while the person moves.
+- When the person approaches within the yield zone, the robot enters
+  `SOCIAL_YIELDING`, stops translating, and continues facing the person.
 - It enters `RETREATING` when the distance drops below 0.58 metres.
 - Losing the target causes a safe search rather than uncontrolled translation.
+- The first lost-target turn uses the bounded predicted direction.
 - A later reacquisition still selects `person_beta`, even if `person_alpha` is
   also visible.
 - The LiDAR scan remains aligned with the arena and contains no persistent
   rays through the robot body.
+
+The implementation is not behaving correctly if the green prediction jumps
+around while the person is still, exceeds the bounded lead, points opposite
+the person's sustained travel, causes the robot to cut in front of the person,
+changes identity without a request, oscillates rapidly between yield and
+follow, or allows translation to continue inside the hard minimum distance.
 
 ### Troubleshooting
 
@@ -727,6 +765,10 @@ source /opt/ros/jazzy/setup.bash
 | `/get_person_targets` | `std_srvs/srv/Trigger` | Return selected identity and all current tracks |
 | `/cycle_person_target` | `std_srvs/srv/Trigger` | Select the next configured person identity |
 | `/human_following/status` | `std_msgs/msg/String` | Latest human-following state |
+| `/human_following/predicted_target` | `geometry_msgs/msg/PoseStamped` | Bounded future person position in the map frame |
+| `/human_following/target_velocity` | `geometry_msgs/msg/TwistStamped` | Filtered selected-person velocity in the map frame |
+| `/human_following/effective_distance` | `std_msgs/msg/Float32` | Current speed-adaptive following distance |
+| `/human_following/visualization` | `visualization_msgs/msg/MarkerArray` | Measured target, prediction, velocity, social radius, and goal |
 | `/get_human_following_status` | `std_srvs/srv/Trigger` | Return target range and following state |
 | `/start_human_following` | `std_srvs/srv/Trigger` | Enable human following |
 | `/stop_human_following` | `std_srvs/srv/Trigger` | Cancel the goal and stop following |
@@ -739,7 +781,7 @@ remains available for later wheel-slip and encoder-odometry experiments.
 ## Roadmap
 
 - Validate camera-guided docking under changing light and stronger occlusion
-- Add richer person-motion prediction and social-navigation behavior
+- Validate predictive following and social navigation across varied routes
 - Replace pose odometry with fused wheel encoder and IMU odometry
 - Transfer the software stack to physical hardware
 

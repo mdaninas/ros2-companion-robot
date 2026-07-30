@@ -45,6 +45,36 @@ human_follower:
     reacquire_pause_duration: 3.0
     # At 0.28 rad/s this is long enough to turn through more than 360 degrees.
     reacquire_sweep_duration: 24.0
+
+    # Estimate person velocity in the map frame so robot motion is not
+    # mistaken for human motion. Prediction only activates after several
+    # consistent samples and is spatially bounded.
+    predictive_following_enabled: true
+    velocity_filter_alpha: 0.28
+    velocity_minimum_sample_dt: 0.08
+    velocity_reset_timeout: 1.20
+    maximum_person_speed: 0.65
+    minimum_prediction_speed: 0.06
+    prediction_horizon: 0.85
+    lost_target_prediction_horizon: 1.40
+    maximum_prediction_distance: 0.35
+    motion_samples_for_confidence: 4
+    # Blend the direct robot-to-person line with the person's travel
+    # direction so the goal trails them instead of cutting across their path.
+    motion_trailing_weight: 0.75
+
+    # Keep a slightly larger gap to a faster-moving person.
+    adaptive_distance_speed_gain: 0.60
+    maximum_follow_distance: 0.90
+
+    # If a person deliberately walks toward the robot, yield translation and
+    # keep facing them. The hard minimum-distance retreat still has priority.
+    social_yield_enabled: true
+    social_yield_distance: 1.10
+    social_yield_release_distance: 1.30
+    social_yield_closing_speed: 0.08
+    social_yield_release_speed: 0.03
+
     goal_update_interval: 1.0
     goal_update_distance: 0.20
     goal_update_yaw: 0.15

@@ -258,7 +258,7 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /human_following/visualization
-      Name: Human Following
+      Name: Predictive Social Following
       Namespaces:
         {}
       Value: true
