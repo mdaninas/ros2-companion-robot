@@ -24,7 +24,9 @@ class MovingObstacleController(Node):
             "y_command_topic",
             "/model/moving_pedestrian/joint/pedestrian_y_joint/cmd_vel",
         )
-        self.declare_parameter("robot_odom_topic", "/odom")
+        self.declare_parameter(
+            "robot_odom_topic", "/odometry/filtered"
+        )
         self.declare_parameter("identity_name", "person_alpha")
         self.declare_parameter(
             "enable_service", "/set_person_alpha_enabled"

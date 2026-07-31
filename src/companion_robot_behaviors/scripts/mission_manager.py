@@ -69,6 +69,7 @@ class MissionManager(Node):
         self.declare_parameter("progress_distance_epsilon", 0.04)
         self.declare_parameter("progress_yaw_epsilon", 0.08)
         self.declare_parameter("update_frequency", 5.0)
+        self.declare_parameter("odometry_topic", "/odometry/filtered")
 
         self.low_battery_threshold = clamp(
             float(self.get_parameter("low_battery_threshold").value),
@@ -161,6 +162,7 @@ class MissionManager(Node):
         update_frequency = max(
             1.0, float(self.get_parameter("update_frequency").value)
         )
+        odometry_topic = str(self.get_parameter("odometry_topic").value)
 
         latched_qos = QoSProfile(depth=1)
         latched_qos.reliability = ReliabilityPolicy.RELIABLE
@@ -197,7 +199,7 @@ class MissionManager(Node):
             latched_qos,
         )
         self.odom_subscription = self.create_subscription(
-            Odometry, "/odom", self._odom_callback, 20
+            Odometry, odometry_topic, self._odom_callback, 20
         )
         self.command_subscription = self.create_subscription(
             Twist, "/cmd_vel_nav", self._command_callback, 20

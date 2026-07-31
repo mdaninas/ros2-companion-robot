@@ -4,7 +4,7 @@ moving_obstacle_controller:
     enable_service: /set_person_alpha_enabled
     x_command_topic: /model/moving_pedestrian/joint/pedestrian_x_joint/cmd_vel
     y_command_topic: /model/moving_pedestrian/joint/pedestrian_y_joint/cmd_vel
-    robot_odom_topic: /odom
+    robot_odom_topic: /odometry/filtered
     start_x: 0.75
     start_y: -0.55
     # This varied loop stays in the open center of the arena. It also leaves a
@@ -36,7 +36,7 @@ moving_obstacle_controller_beta:
     enable_service: /set_person_beta_enabled
     x_command_topic: /model/moving_pedestrian_beta/joint/pedestrian_beta_x_joint/cmd_vel
     y_command_topic: /model/moving_pedestrian_beta/joint/pedestrian_beta_y_joint/cmd_vel
-    robot_odom_topic: /odom
+    robot_odom_topic: /odometry/filtered
     start_x: -0.65
     start_y: 0.45
     # This second route crosses the first person's route at different angles.

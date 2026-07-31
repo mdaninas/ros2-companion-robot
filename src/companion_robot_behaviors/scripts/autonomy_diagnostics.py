@@ -49,6 +49,7 @@ class AutonomyDiagnostics(Node):
         self.declare_parameter("low_battery_threshold", 0.25)
         self.declare_parameter("critical_battery_threshold", 0.12)
         self.declare_parameter("marker_frame", "base_footprint")
+        self.declare_parameter("odometry_topic", "/odometry/filtered")
 
         self.publish_frequency = max(
             0.5, float(self.get_parameter("publish_frequency").value)
@@ -102,6 +103,7 @@ class AutonomyDiagnostics(Node):
             self.low_battery_threshold,
         )
         self.marker_frame = str(self.get_parameter("marker_frame").value)
+        odometry_topic = str(self.get_parameter("odometry_topic").value)
 
         latched_qos = QoSProfile(depth=1)
         latched_qos.reliability = ReliabilityPolicy.RELIABLE
@@ -136,7 +138,10 @@ class AutonomyDiagnostics(Node):
             BatteryState, "/battery_state", self._battery_callback, latched_qos
         )
         self.create_subscription(
-            Odometry, "/odom", self._odom_callback, qos_profile_sensor_data
+            Odometry,
+            odometry_topic,
+            self._odom_callback,
+            qos_profile_sensor_data,
         )
         self.create_subscription(
             LaserScan, "/scan", self._scan_callback, qos_profile_sensor_data
@@ -504,4 +509,3 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-

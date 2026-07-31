@@ -529,6 +529,87 @@
     <origin xyz="0 0 ${base_height / 2.0}"/>
   </joint>
 
+  <!--
+    Six-axis IMU with consumer-grade noise and slowly varying bias. Raw data
+    is covariance-annotated by sensor_covariance_adapter before entering the
+    EKF, keeping the simulated sensor interface equivalent to real hardware.
+  -->
+  <gazebo reference="imu_link">
+    <sensor name="imu_sensor" type="imu">
+      <topic>/imu/data_raw</topic>
+      <gz_frame_id>imu_link</gz_frame_id>
+      <update_rate>50</update_rate>
+      <always_on>true</always_on>
+      <visualize>false</visualize>
+      <imu>
+        <angular_velocity>
+          <x>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.008</stddev>
+              <bias_mean>0.0002</bias_mean>
+              <bias_stddev>0.0001</bias_stddev>
+              <dynamic_bias_stddev>0.00002</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>100.0</dynamic_bias_correlation_time>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.008</stddev>
+              <bias_mean>0.0002</bias_mean>
+              <bias_stddev>0.0001</bias_stddev>
+              <dynamic_bias_stddev>0.00002</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>100.0</dynamic_bias_correlation_time>
+            </noise>
+          </y>
+          <z>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.010</stddev>
+              <bias_mean>0.0003</bias_mean>
+              <bias_stddev>0.00015</bias_stddev>
+              <dynamic_bias_stddev>0.00003</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>100.0</dynamic_bias_correlation_time>
+            </noise>
+          </z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.060</stddev>
+              <bias_mean>0.010</bias_mean>
+              <bias_stddev>0.005</bias_stddev>
+              <dynamic_bias_stddev>0.001</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>60.0</dynamic_bias_correlation_time>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.060</stddev>
+              <bias_mean>0.010</bias_mean>
+              <bias_stddev>0.005</bias_stddev>
+              <dynamic_bias_stddev>0.001</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>60.0</dynamic_bias_correlation_time>
+            </noise>
+          </y>
+          <z>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.080</stddev>
+              <bias_mean>0.015</bias_mean>
+              <bias_stddev>0.008</bias_stddev>
+              <dynamic_bias_stddev>0.002</dynamic_bias_stddev>
+              <dynamic_bias_correlation_time>60.0</dynamic_bias_correlation_time>
+            </noise>
+          </z>
+        </linear_acceleration>
+      </imu>
+    </sensor>
+  </gazebo>
+
   <!-- 360-degree simulated LiDAR mounted inside the physical LiDAR housing. -->
   <gazebo reference="lidar_link">
     <sensor name="lidar_sensor" type="gpu_lidar">
@@ -653,10 +734,10 @@
       <wheel_radius>${wheel_radius}</wheel_radius>
 
       <topic>/cmd_vel</topic>
-      <!-- Keep encoder-style wheel odometry available for comparison. -->
-      <odom_topic>/wheel_odom</odom_topic>
+      <!-- Raw encoder-style odometry is covariance-annotated before fusion. -->
+      <odom_topic>/wheel_odom/raw</odom_topic>
       <tf_topic>/wheel_tf</tf_topic>
-      <frame_id>wheel_odom</frame_id>
+      <frame_id>odom</frame_id>
       <child_frame_id>base_footprint</child_frame_id>
       <odom_publish_frequency>30</odom_publish_frequency>
 
@@ -670,18 +751,20 @@
       <min_angular_acceleration>-2.5</min_angular_acceleration>
     </plugin>
 
-    <!-- Pose-based simulation odometry with modest measurement noise. The
-         noise is deliberately small: AMCL must correct it, but precision
-         docking still receives a usable local reference. -->
+    <!--
+      Ground truth remains available strictly for offline error comparison.
+      Its TF topic is intentionally not bridged: the EKF exclusively owns
+      odom -> base_footprint.
+    -->
     <plugin filename="gz-sim-odometry-publisher-system"
             name="gz::sim::systems::OdometryPublisher">
       <odom_frame>odom</odom_frame>
       <robot_base_frame>base_footprint</robot_base_frame>
-      <odom_topic>/odom</odom_topic>
-      <tf_topic>/tf</tf_topic>
+      <odom_topic>/ground_truth/odom</odom_topic>
+      <tf_topic>/ground_truth/tf</tf_topic>
       <odom_publish_frequency>30</odom_publish_frequency>
       <dimensions>2</dimensions>
-      <gaussian_noise>0.003</gaussian_noise>
+      <gaussian_noise>0.0</gaussian_noise>
     </plugin>
 
     <plugin filename="gz-sim-joint-state-publisher-system"

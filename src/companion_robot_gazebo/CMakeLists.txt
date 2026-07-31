@@ -18,4 +18,9 @@ install(PROGRAMS scripts/moving_obstacle_controller.py
   RENAME moving_obstacle_controller
 )
 
+install(PROGRAMS scripts/sensor_covariance_adapter.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME sensor_covariance_adapter
+)
+
 ament_package()

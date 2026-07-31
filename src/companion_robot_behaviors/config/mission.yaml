@@ -27,3 +27,4 @@ mission_manager:
     progress_distance_epsilon: 0.04
     progress_yaw_epsilon: 0.08
     update_frequency: 5.0
+    odometry_topic: /odometry/filtered

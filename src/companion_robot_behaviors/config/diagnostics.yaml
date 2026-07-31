@@ -13,4 +13,4 @@ autonomy_diagnostics:
     low_battery_threshold: 0.25
     critical_battery_threshold: 0.12
     marker_frame: base_footprint
-
+    odometry_topic: /odometry/filtered

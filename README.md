@@ -22,7 +22,9 @@ foundation for a future physical differential-drive robot.
 - Gazebo physics with drive wheels and front/rear caster support
 - Simulated 360-degree 2D LiDAR
 - Simulated front and rear RGB cameras
-- Gazebo pose odometry and separate encoder-style wheel odometry
+- Simulated six-axis IMU with configurable noise and covariance
+- EKF fusion of encoder odometry and IMU measurements
+- Ground-truth odometry retained only for offline error comparison
 - Safe `W`, `A`, `S`, `D` terminal teleoperation
 
 ### Mapping and autonomous navigation
@@ -58,10 +60,14 @@ foundation for a future physical differential-drive robot.
 ```mermaid
 flowchart LR
     GZ["Gazebo Harmonic<br/>robot, arena, pedestrians"] --> BR["ROS-Gazebo bridge"]
-    BR --> SENS["LiDAR, cameras,<br/>odometry, joint states"]
+    BR --> SENS["LiDAR, cameras,<br/>wheel odometry, IMU"]
+    SENS --> EKF["robot_localization EKF"]
+    EKF --> ODOM["Filtered odometry<br/>and odom → base TF"]
 
-    SENS --> SLAM["SLAM Toolbox"]
-    SENS --> LOC["AMCL localization"]
+    ODOM --> SLAM["SLAM Toolbox"]
+    ODOM --> LOC["AMCL localization"]
+    SENS --> SLAM
+    SENS --> LOC
     SLAM --> MAP["Occupancy map"]
     MAP --> LOC
     LOC --> NAV["Nav2"]
@@ -97,7 +103,7 @@ direction-aware collision protection before reaching the robot.
 | Area | Status |
 | --- | --- |
 | Robot model and Gazebo simulation | Complete |
-| LiDAR, cameras, odometry, and TF | Validated in simulation |
+| LiDAR, cameras, encoder/IMU fusion, and TF | Validated in simulation |
 | SLAM mapping and map export | Validated in simulation |
 | AMCL localization and Nav2 navigation | Validated in simulation |
 | Waypoint patrol and return home | Validated in simulation |
@@ -107,7 +113,7 @@ direction-aware collision protection before reaching the robot.
 | Mission recovery and autonomy diagnostics | Validated in simulation |
 | Multi-person identity tracking | Validated in simulation |
 | Predictive human following and social safety | Validated in simulation |
-| Wheel encoder and IMU sensor fusion | Planned |
+| Wheel encoder and IMU sensor fusion | Validated in simulation |
 | Physical robot deployment | Planned |
 
 ## Repository Layout
@@ -120,7 +126,7 @@ direction-aware collision protection before reaching the robot.
 |   |   |-- rviz/          # Robot-model RViz configuration
 |   |   `-- urdf/          # Parametric URDF/Xacro model
 |   |-- companion_robot_gazebo/
-|   |   |-- config/        # SLAM and pedestrian parameters
+|   |   |-- config/        # Sensor fusion, SLAM, and pedestrian parameters
 |   |   |-- launch/        # Arena, simulation, and mapping launches
 |   |   |-- maps/          # Saved occupancy map
 |   |   |-- rviz/          # Simulation and mapping views
@@ -486,6 +492,7 @@ state should settle at `HOLDING_DISTANCE`.
 | File | Purpose |
 | --- | --- |
 | `src/companion_robot_description/urdf/companion_robot.urdf.xacro` | Robot geometry, joints, sensors, and Gazebo plugins |
+| `src/companion_robot_gazebo/config/sensor_fusion.yaml` | Sensor covariance and EKF fusion parameters |
 | `src/companion_robot_gazebo/config/slam.yaml` | SLAM Toolbox parameters |
 | `src/companion_robot_gazebo/config/moving_obstacle.yaml` | Pedestrian routes and safety behavior |
 | `src/companion_robot_navigation/config/nav2_params.yaml` | AMCL, planners, controllers, costmaps, and recovery |
@@ -505,8 +512,12 @@ state should settle at `HOLDING_DISTANCE`.
 | --- | --- | --- |
 | `/cmd_vel` | `geometry_msgs/msg/Twist` | Final robot velocity |
 | `/scan` | `sensor_msgs/msg/LaserScan` | Simulated 2D LiDAR |
-| `/odom` | `nav_msgs/msg/Odometry` | Noisy Gazebo pose odometry |
-| `/wheel_odom` | `nav_msgs/msg/Odometry` | Encoder-style wheel odometry |
+| `/wheel_odom/raw` | `nav_msgs/msg/Odometry` | Raw Gazebo encoder-style measurement |
+| `/wheel_odom` | `nav_msgs/msg/Odometry` | Encoder odometry with configured covariance |
+| `/imu/data_raw` | `sensor_msgs/msg/Imu` | Raw noisy simulated IMU measurement |
+| `/imu/data` | `sensor_msgs/msg/Imu` | IMU measurement with configured covariance |
+| `/odometry/filtered` | `nav_msgs/msg/Odometry` | EKF-fused local odometry used by the stack |
+| `/ground_truth/odom` | `nav_msgs/msg/Odometry` | Diagnostic-only Gazebo ground truth |
 | `/map` | `nav_msgs/msg/OccupancyGrid` | Occupancy map |
 | `/front_camera/image_raw` | `sensor_msgs/msg/Image` | Front perception camera |
 | `/rear_camera/image_raw` | `sensor_msgs/msg/Image` | Rear docking camera |
@@ -547,6 +558,28 @@ state should settle at `HOLDING_DISTANCE`.
 | `/stop_human_following` | Stop following safely |
 
 ## Troubleshooting
+
+### Verify encoder and IMU sensor fusion
+
+After starting any integrated launch, confirm the sensor inputs and EKF output:
+
+```bash
+ros2 topic hz /wheel_odom
+ros2 topic hz /imu/data
+ros2 topic hz /odometry/filtered
+```
+
+Expected rates are approximately 30 Hz, 50 Hz, and 20 Hz respectively.
+`ros2 run tf2_ros tf2_echo odom base_footprint` should report one continuous
+transform. The EKF is intentionally the only publisher of that transform;
+`/ground_truth/odom` must never be bridged into `/tf`.
+
+`robot_localization` also publishes sensor timeout and rejection details on
+`/diagnostics`:
+
+```bash
+ros2 topic echo /diagnostics
+```
 
 ### RViz reports that a frame does not exist
 
@@ -606,18 +639,17 @@ ros2 launch companion_robot_description display.launch.py \
   hardware.
 - Person identities currently use configured clothing colors rather than a
   general-purpose human re-identification model.
-- `/odom` still originates from a noisy Gazebo pose estimate; wheel encoder
-  and IMU fusion is the next localization milestone.
+- Wheel odometry and IMU remain simulated; their covariance and noise must be
+  recalibrated for the selected physical encoders and IMU.
 - Battery, charging contacts, and dock-marker lighting remain simulated.
 
 ## Roadmap
 
-1. Add simulated IMU data and fuse it with wheel odometry using an EKF.
-2. Validate camera-guided docking under stronger lighting and occlusion
+1. Validate camera-guided docking under stronger lighting and occlusion
    changes.
-3. Add human-aware passing-side selection for shared navigation spaces.
-4. Introduce gesture or command-based companion interaction.
-5. Create a hardware abstraction layer and deploy to a physical robot.
+2. Add human-aware passing-side selection for shared navigation spaces.
+3. Introduce gesture or command-based companion interaction.
+4. Create a hardware abstraction layer and deploy to a physical robot.
 
 ## Contributing
 

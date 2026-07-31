@@ -36,6 +36,9 @@ def generate_launch_description():
     default_moving_obstacle_params = PathJoinSubstitution(
         [gazebo_share, "config", "moving_obstacle.yaml"]
     )
+    sensor_fusion_params = PathJoinSubstitution(
+        [gazebo_share, "config", "sensor_fusion.yaml"]
+    )
 
     robot_description = ParameterValue(
         Command([FindExecutable(name="xacro"), ' "', xacro_file, '"']),
@@ -103,10 +106,11 @@ def generate_launch_description():
                 "pedestrian_beta_y_joint/cmd_vel"
                 "@std_msgs/msg/Float64]gz.msgs.Double"
             ),
-            # Gazebo -> ROS stable pose odometry, wheel odometry, and TF.
-            "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
-            "/wheel_odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
-            "/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V",
+            # Raw encoder and IMU measurements for robot_localization.
+            "/wheel_odom/raw@nav_msgs/msg/Odometry[gz.msgs.Odometry",
+            "/imu/data_raw@sensor_msgs/msg/Imu[gz.msgs.IMU",
+            # Ground truth is diagnostic-only and never contributes TF.
+            "/ground_truth/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry",
             # Gazebo -> ROS 360-degree LiDAR scan.
             "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
             # Gazebo -> ROS rear docking camera and calibration.
@@ -129,6 +133,23 @@ def generate_launch_description():
                 "/joint_states",
             )
         ],
+    )
+
+    sensor_covariance_adapter = Node(
+        package="companion_robot_gazebo",
+        executable="sensor_covariance_adapter",
+        name="sensor_covariance_adapter",
+        output="screen",
+        parameters=[sensor_fusion_params, {"use_sim_time": True}],
+    )
+
+    ekf = Node(
+        package="robot_localization",
+        executable="ekf_node",
+        name="ekf_filter_node",
+        output="screen",
+        parameters=[sensor_fusion_params, {"use_sim_time": True}],
+        remappings=[("odometry/filtered", "/odometry/filtered")],
     )
 
     rviz = Node(
@@ -211,6 +232,8 @@ def generate_launch_description():
             gazebo,
             robot_state_publisher,
             bridge,
+            sensor_covariance_adapter,
+            ekf,
             moving_obstacle_controller,
             moving_obstacle_controller_beta,
             rviz,

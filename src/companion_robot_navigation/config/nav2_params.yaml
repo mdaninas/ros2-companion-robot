@@ -1,7 +1,8 @@
 amcl:
   ros__parameters:
-    # Simulation odometry already has bounded 3 mm noise. Large motion-model
-    # noise allowed moving people to pull AMCL away from the static map.
+    # Encoder/IMU fusion already constrains short-term motion. Large AMCL
+    # motion-model noise allowed moving people to pull the estimate away from
+    # the static map.
     alpha1: 0.04
     alpha2: 0.04
     alpha3: 0.03
@@ -60,7 +61,7 @@ bt_navigator:
   ros__parameters:
     global_frame: map
     robot_base_frame: base_footprint
-    odom_topic: /odom
+    odom_topic: /odometry/filtered
     bt_loop_duration: 10
     default_server_timeout: 2000
     wait_for_service_timeout: 2000
@@ -79,6 +80,7 @@ controller_server:
     # Fifteen control updates per second is responsive while remaining stable
     # under WSL's variable scheduling latency.
     controller_frequency: 15.0
+    odom_topic: /odometry/filtered
     costmap_update_timeout: 0.5
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
@@ -238,7 +240,7 @@ velocity_smoother:
     min_velocity: [-0.10, 0.0, -0.65]
     max_accel: [0.40, 0.0, 1.20]
     max_decel: [-0.40, 0.0, -1.20]
-    odom_topic: /odom
+    odom_topic: /odometry/filtered
     odom_duration: 0.10
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 0.50
